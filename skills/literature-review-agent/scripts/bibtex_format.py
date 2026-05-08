@@ -113,21 +113,8 @@ def format_entry(paper: dict, key: str) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--pool", required=True, help="citation_pool.json")
-    p.add_argument("--out", required=True, help="output refs.bib")
-    args = p.parse_args()
-
-    with open(args.pool) as f:
-        pool = json.load(f)
-    papers = pool.get("papers", [])
-    if not papers:
-        print("ERROR: pool contains no papers", file=sys.stderr)
-        return 1
-
+def assign_bibtex_keys(papers: list[dict]) -> list[str]:
     keys_used: dict[str, int] = {}
-    entries: list[str] = []
     paper_keys: list[str] = []
 
     for paper in papers:
@@ -142,6 +129,26 @@ def main() -> int:
             key = base_key
         paper["bibtex_key"] = key
         paper_keys.append(key)
+
+    return paper_keys
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--pool", required=True, help="citation_pool.json")
+    p.add_argument("--out", required=True, help="output refs.bib")
+    args = p.parse_args()
+
+    with open(args.pool) as f:
+        pool = json.load(f)
+    papers = pool.get("papers", [])
+    if not papers:
+        print("ERROR: pool contains no papers", file=sys.stderr)
+        return 1
+
+    entries: list[str] = []
+    paper_keys = assign_bibtex_keys(papers)
+    for paper, key in zip(papers, paper_keys):
         entries.append(format_entry(paper, key))
 
     with open(args.out, "w") as f:

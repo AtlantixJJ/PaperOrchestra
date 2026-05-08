@@ -29,6 +29,10 @@ limit.
 - `workspace/drafts/intro_relwork.tex` — drafted Introduction and Related
   Work sections, written into the template, with the rest of the template
   preserved verbatim
+- Reference database:
+  - `workspace/reference_database/papers/*.pdf` — downloaded open-access PDFs
+  - `workspace/reference_database/summaries/*.md` — structured Markdown summaries
+  - `workspace/reference_database/index.csv` and `index.json` — synchronized paper index
 
 ## Two-phase pipeline (App. D.3)
 
@@ -48,7 +52,7 @@ PHASE 2 — Sequential Citation Verification (1 QPS, with cache)
         If MISS: proceed with live request below.
      1. Query Semantic Scholar by title:
           GET https://api.semanticscholar.org/graph/v1/paper/search?query=<title>
-              &fields=title,abstract,year,authors,venue,externalIds&limit=5
+              &fields=title,abstract,year,authors,venue,externalIds,openAccessPdf&limit=5
         (Public endpoint, no key. Throttle to 1 QPS for live requests only.)
      2. Store the S2 response in cache: s2_cache.py --store.
      3. Pick the top hit. Check Levenshtein title ratio against the original
@@ -231,7 +235,64 @@ python skills/literature-review-agent/scripts/validate_pool.py \
 # Must pass before proceeding to Step 4.
 ```
 
-### 4. Build the BibTeX file
+### 4. Build the required reference database
+
+The literature review step MUST produce a local reference-paper database before
+building `refs.bib`. This database is the source of detailed paper summaries
+used by the writing step and by later manual review.
+
+First assign canonical BibTeX keys, because the database uses those keys for
+PDF and Markdown filenames:
+
+```bash
+python skills/literature-review-agent/scripts/assign_bibtex_keys.py \
+    --pool workspace/citation_pool.json
+```
+
+Then run the batch enrichment script to download PDFs, call Gemini to generate
+Markdown summaries, and update the index for **all verified papers** in the pool.
+This one-call wrapper handles all iterative JSON parsing and PDF mechanics automatically.
+
+```bash
+python skills/literature-review-agent/scripts/build_reference_database.py \
+    --workspace workspace \
+    --pool workspace/citation_pool.json
+```
+
+Build or check the synchronized index:
+
+```bash
+python skills/literature-review-agent/scripts/sync_reference_index.py \
+    --workspace workspace --fix
+
+python skills/literature-review-agent/scripts/sync_reference_index.py \
+    --workspace workspace
+```
+
+**CRITICAL GUARDRAIL:** Do NOT proceed to Step 5 (BibTeX generation) until `sync_reference_index.py` exits with 0 errors.
+
+The index contains one row per verified paper:
+
+```text
+bibtex_key,title,location,year,venue,summary_md_path,pdf_path,one_word_summary,status
+```
+
+Run with `--fix --create-stubs` if you want placeholder Markdown summaries for
+papers not yet summarized during development. Do not use stubs for a completed
+literature-review run. The sync check fails when:
+
+- a paper in `citation_pool.json` has no summary,
+- a summary has no matching paper,
+- a summary frontmatter `bibtex_key` does not match its canonical key,
+- a summary frontmatter `summary_status` is not `complete`,
+- `index.csv` is missing or stale.
+
+The reference database step is complete only when every verified paper has a
+Markdown summary and `sync_reference_index.py --workspace workspace` exits 0.
+
+### 5. Build the BibTeX file
+
+After the reference database is synchronized, generate `refs.bib`:
 
 ```bash
 python skills/literature-review-agent/scripts/bibtex_format.py \
@@ -239,31 +300,18 @@ python skills/literature-review-agent/scripts/bibtex_format.py \
     --out workspace/refs.bib
 ```
 
-The script generates citation keys deterministically from `firstauthor + year
-+ first significant word of title` (e.g., `vaswani2017attention`). It writes
-out only `@article` / `@inproceedings` / `@misc` entries — never invents
-fields. It also writes the canonical `bibtex_key` back into each paper record
-in `citation_pool.json`.
+The script uses the same deterministic keys assigned in Step 4 and writes out
+only `@article` / `@inproceedings` / `@misc` entries — never invents fields.
+It also writes the canonical `bibtex_key` back into each paper record in
+`citation_pool.json`, which should be idempotent after `assign_bibtex_keys.py`.
 
-**Immediately after bibtex_format.py**, sync keys in `intro_relwork.tex`:
-
-```bash
-python skills/literature-review-agent/scripts/sync_keys.py \
-    --pool workspace/citation_pool.json \
-    --tex  workspace/drafts/intro_relwork.tex \
-    --inplace
-# Replaces every \cite{agent_key} with \cite{canonical_bibtex_key}.
-# Eliminates citation_coverage gate failures caused by key mismatch.
-```
-
-These two steps replace the manual Python snippets that were previously
-required. The pipeline is now:
+The required pipeline is now:
 
 ```
-dedupe_by_id → validate_pool --fix → bibtex_format → sync_keys
+dedupe_by_id → validate_pool --fix → assign_bibtex_keys → enrich_reference_paper for each paper → sync_reference_index → bibtex_format
 ```
 
-### 5. Draft Introduction + Related Work
+### 6. Draft Introduction + Related Work
 
 This is where you (the host agent) actually write text. Load the
 **verbatim Literature Review Agent prompt** at `references/prompt.md`.
@@ -289,7 +337,18 @@ template **and leave everything else untouched**. Output: the full
 `template.tex` with those two sections filled. Save to
 `workspace/drafts/intro_relwork.tex`.
 
-### 6. Verify ≥90% citation coverage
+### 7. Verify ≥90% citation coverage
+
+First sync any generated citation keys back to the canonical BibTeX keys:
+
+```bash
+python skills/literature-review-agent/scripts/sync_keys.py \
+    --pool workspace/citation_pool.json \
+    --tex  workspace/drafts/intro_relwork.tex \
+    --inplace
+```
+
+Then run the coverage gate:
 
 ```bash
 python skills/literature-review-agent/scripts/citation_coverage.py \
@@ -346,7 +405,8 @@ If your host has no web search tool, switch to degraded mode:
 - `scripts/pre_dedup_candidates.py` — **NEW** dedup Phase 1 candidates before Phase 2 (saves 30-40% S2 quota)
 - `scripts/s2_cache.py` — **NEW** persistent S2 response cache (eliminates re-verification on re-runs)
 - `scripts/validate_pool.py` — **NEW** validate & auto-fix citation_pool.json schema (authors format)
-- `scripts/sync_keys.py` — **NEW** sync cite keys in .tex with canonical bibtex_keys after bibtex_format.py
+- `scripts/assign_bibtex_keys.py` — assign canonical keys before reference database enrichment
+- `scripts/sync_keys.py` — sync cite keys in .tex with canonical bibtex_keys after drafting
 - `scripts/levenshtein_match.py` — fuzzy title match (ratio > 70)
 - `scripts/check_cutoff.py` — date cmp w/ month → day-1 default
 - `scripts/dedupe_by_id.py` — dedup verified pool by S2 paperId
@@ -354,3 +414,7 @@ If your host has no web search tool, switch to degraded mode:
 - `scripts/citation_coverage.py` — ≥90% citation coverage gate
 - `scripts/s2_search.py` — **NEW** Semantic Scholar title-search helper; reads `SEMANTIC_SCHOLAR_API_KEY` from env (optional — falls back to unauthenticated)
 - `scripts/exa_search.py` — optional Exa Phase 1 backend (reads `EXA_API_KEY` from env)
+- `scripts/build_reference_database.py` — required batch wrapper that downloads PDFs, calls Gemini, writes Markdown summaries, and updates the index for all verified papers
+- `scripts/download_papers.py` — lower-level PDF downloader used by the enrichment wrapper
+- `scripts/summarize_papers_gemini.py` — lower-level Gemini summarizer used by the enrichment wrapper
+- `scripts/sync_reference_index.py` — required database sync gate for Markdown summaries and index files

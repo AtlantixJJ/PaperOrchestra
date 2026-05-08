@@ -43,7 +43,7 @@ import urllib.parse
 import urllib.request
 
 S2_BASE = "https://api.semanticscholar.org/graph/v1"
-DEFAULT_FIELDS = "title,abstract,year,authors,venue,externalIds"
+DEFAULT_FIELDS = "title,abstract,year,authors,venue,externalIds,openAccessPdf"
 DEFAULT_LIMIT = 5
 MAX_LIMIT = 100
 _RETRY_SLEEP = 5   # seconds to wait after a 429 before retrying
