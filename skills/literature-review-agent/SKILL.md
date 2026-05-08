@@ -32,7 +32,7 @@ limit.
 - Reference database:
   - `workspace/reference_database/papers/*.pdf` — downloaded open-access PDFs
   - `workspace/reference_database/summaries/*.md` — structured Markdown summaries
-  - `workspace/reference_database/index.csv` and `index.json` — synchronized paper index
+  - `workspace/reference_database/index.json` — synchronized paper index
 
 ## Two-phase pipeline (App. D.3)
 
@@ -285,7 +285,7 @@ literature-review run. The sync check fails when:
 - a summary has no matching paper,
 - a summary frontmatter `bibtex_key` does not match its canonical key,
 - a summary frontmatter `summary_status` is not `complete`,
-- `index.csv` is missing or stale.
+- `index.json` is missing or stale.
 
 The reference database step is complete only when every verified paper has a
 Markdown summary and `sync_reference_index.py --workspace workspace` exits 0.
