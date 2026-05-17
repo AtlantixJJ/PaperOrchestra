@@ -250,36 +250,34 @@ python skills/literature-review-agent/scripts/assign_bibtex_keys.py \
 ```
 
 Then run the batch enrichment script to download PDFs, call Gemini to generate
-Markdown summaries, and update the index for **all verified papers** in the pool.
+Markdown summaries for missing or corrupt references, and update the index.
 This one-call wrapper handles all iterative JSON parsing and PDF mechanics automatically.
 
 ```bash
 python skills/literature-review-agent/scripts/build_reference_database.py \
-    --workspace workspace \
     --pool workspace/citation_pool.json
 ```
 
 Build or check the synchronized index:
 
 ```bash
-python skills/literature-review-agent/scripts/sync_reference_index.py \
-    --workspace workspace --fix
+python skills/literature-review-agent/scripts/maintain_reference_database.py \
+    --pool workspace/citation_pool.json --fix
 
-python skills/literature-review-agent/scripts/sync_reference_index.py \
+python skills/literature-review-agent/scripts/maintain_reference_database.py \
     --workspace workspace
 ```
 
-**CRITICAL GUARDRAIL:** Do NOT proceed to Step 5 (BibTeX generation) until `sync_reference_index.py` exits with 0 errors.
+**CRITICAL GUARDRAIL:** Do NOT proceed to Step 5 (BibTeX generation) until `maintain_reference_database.py` exits with 0 errors.
 
 The index contains one row per verified paper:
 
 ```text
-bibtex_key,title,location,year,venue,summary_md_path,pdf_path,one_word_summary,status
+bibtex_key,title,location,year,summary,status
 ```
 
-Run with `--fix --create-stubs` if you want placeholder Markdown summaries for
-papers not yet summarized during development. Do not use stubs for a completed
-literature-review run. The sync check fails when:
+Run `build_reference_database.py` to regenerate missing or corrupt references.
+The maintenance check fails when:
 
 - a paper in `citation_pool.json` has no summary,
 - a summary has no matching paper,
@@ -288,7 +286,7 @@ literature-review run. The sync check fails when:
 - `index.json` is missing or stale.
 
 The reference database step is complete only when every verified paper has a
-Markdown summary and `sync_reference_index.py --workspace workspace` exits 0.
+Markdown summary and `maintain_reference_database.py --workspace workspace` exits 0.
 
 ### 5. Build the BibTeX file
 
@@ -308,7 +306,7 @@ It also writes the canonical `bibtex_key` back into each paper record in
 The required pipeline is now:
 
 ```
-dedupe_by_id → validate_pool --fix → assign_bibtex_keys → enrich_reference_paper for each paper → sync_reference_index → bibtex_format
+dedupe_by_id → validate_pool --fix → assign_bibtex_keys → build_reference_database → maintain_reference_database → bibtex_format
 ```
 
 ### 6. Draft Introduction + Related Work

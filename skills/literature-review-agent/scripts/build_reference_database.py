@@ -2,30 +2,29 @@
 """
 build_reference_database.py — Batch wrapper for reference enrichment.
 
-The literature-review agent should call this script with the workspace and citation pool.
+The literature-review agent should call this script with a citation pool.
+The workspace is inferred as the directory containing that pool.
 The script handles all mechanics for every verified paper:
 
 1. assign or preserve a stable bibtex_key,
 2. download/cache the PDF when an open PDF URL is available,
 3. call Gemini CLI to create the structured Markdown summary,
-4. update the database index.
+4. run reference-database maintenance so index.json reflects summaries.
 
 Usage:
-    python build_reference_database.py --workspace workspace --pool workspace/citation_pool.json
+    python build_reference_database.py --pool workspace/citation_pool.json
 """
 import argparse
-import csv
 import json
 import os
 import re
-import shlex
-import subprocess
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from bibtex_format import assign_bibtex_keys
+from maintain_reference_database import maintain_reference_database, pool_papers
 
 # --- Inlined from download_papers.py ---
 def arxiv_pdf_url(arxiv_id: str) -> str:
@@ -98,9 +97,9 @@ def yaml_scalar(value: object) -> str:
 
 def guess_one_word(paper: dict) -> str:
     text = " ".join([
-        paper.get("title", ""),
-        paper.get("abstract", ""),
-        paper.get("venue", ""),
+        str(paper.get("title") or ""),
+        str(paper.get("abstract") or ""),
+        str(paper.get("venue") or ""),
     ]).lower()
     for word in ("gaussian", "feedforward", "attention", "pose", "mesh", "nerf", "metric", "dataset", "rendering", "optimization"):
         if word in text:
@@ -128,30 +127,47 @@ def parse_frontmatter(md: str) -> dict:
 def fallback_summary(paper: dict, key: str, pdf_path: str, status: str) -> str:
     abstract = paper.get("abstract") or "No abstract is available in the citation pool."
     title = paper.get("title", key)
-    values = {
-        "bibtex_key": key,
-        "title_yaml": yaml_scalar(title),
-        "year": paper.get("year", ""),
-        "venue_yaml": yaml_scalar(paper.get("venue", "")),
-        "paper_id": paper.get("paperId", ""),
-        "pdf_path_yaml": yaml_scalar(pdf_path),
-        "semantic_scholar_url_yaml": yaml_scalar(s2_url(paper)),
-        "one_word_summary": "other",
-        "summary_status": status,
-        "title": title,
-        "technical_summary": abstract,
-        "problem": "TODO: Replace this metadata-only placeholder with a detailed Gemini summary.",
-        "core_method": "TODO",
-        "representation": "TODO",
-        "inputs_and_assumptions": "TODO",
-        "training_and_inference": "TODO",
-        "evaluation": "TODO",
-        "main_strengths": "TODO",
-        "limitations": "TODO",
-        "relevance_to_liteavatar": "TODO",
-        "possible_citation_use": "TODO",
-    }
-    return TEMPLATE.format(**values)
+    body = TEMPLATE.replace("# <title>", f"# {title}", 1)
+    body = body.replace(
+        "(A concise but technical summary, including only the technical details and results, and it can include more technical details that the original abstract does not contain.)",
+        abstract,
+        1,
+    )
+    body = body.replace(
+        "(Make this detailed, self-contained, mathematically rich and rigorous.)",
+        "TODO: Replace this metadata-only placeholder with a detailed Gemini summary.",
+        1,
+    )
+    body = body.replace("(Include concrete numbers and metrics.)", "TODO", 1)
+    return apply_summary_frontmatter(body, paper, key, pdf_path, status)
+
+def summary_frontmatter(paper: dict, key: str, pdf_path: str, status: str) -> str:
+    lines = [
+        f"bibtex_key: {key}",
+        f"title: {yaml_scalar(paper.get('title', key))}",
+        f"year: {paper.get('year', '')}",
+        f"venue: {yaml_scalar(paper.get('venue', ''))}",
+        f"paper_id: {paper.get('paperId', '')}",
+        f"pdf_path: {yaml_scalar(pdf_path)}",
+        f"semantic_scholar_url: {yaml_scalar(s2_url(paper))}",
+        f"one_word_summary: {guess_one_word(paper)}",
+        f"summary_status: {status}",
+    ]
+    return "\n".join(lines)
+
+def apply_summary_frontmatter(md: str, paper: dict, key: str, pdf_path: str, status: str) -> str:
+    header = f"---\n{summary_frontmatter(paper, key, pdf_path, status)}\n---"
+    body = md.strip()
+    if body.startswith("---"):
+        end = body.find("\n---", 3)
+        if end != -1:
+            body = body[end + len("\n---"):].lstrip()
+    title = paper.get("title", key)
+    if body.startswith("# "):
+        body = re.sub(r"^# .*$", f"# {title}", body, count=1, flags=re.M)
+    else:
+        body = f"# {title}\n\n{body}"
+    return f"{header}\n\n{body}\n"
 
 def clean_markdown_output(text: str) -> str:
     text = text.strip()
@@ -179,6 +195,21 @@ def ensure_key(paper: dict) -> str:
         return paper["bibtex_key"]
     assign_bibtex_keys([paper])
     return paper["bibtex_key"]
+
+def ensure_keys(papers: list[dict]) -> None:
+    used = {paper["bibtex_key"] for paper in papers if paper.get("bibtex_key")}
+    for paper in papers:
+        if paper.get("bibtex_key"):
+            continue
+        assign_bibtex_keys([paper])
+        base_key = paper["bibtex_key"]
+        key = base_key
+        suffix_index = 0
+        while key in used:
+            key = f"{base_key}{chr(ord('a') + suffix_index)}"
+            suffix_index += 1
+        paper["bibtex_key"] = key
+        used.add(key)
 
 def download_one(paper: dict, pdf_path: Path, timeout: int, user_agent: str, force: bool) -> dict:
     record = {
@@ -251,7 +282,11 @@ def summarize_one(
     pdf_for_prompt = str(pdf_path.resolve()) if pdf_path.exists() else ""
     rel_pdf_yaml = f"papers/{key}.pdf" if pdf_path.exists() else ""
     metadata = json.dumps(paper, indent=2, ensure_ascii=False)
-    prompt = PROMPT.format(metadata=metadata, pdf_path=pdf_for_prompt or "(no local PDF available)")
+    prompt = PROMPT.format(
+        summary_template=TEMPLATE.rstrip(),
+        metadata=metadata,
+        pdf_path=pdf_for_prompt or "(no local PDF available)",
+    )
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path.write_text(prompt)
@@ -272,7 +307,13 @@ def summarize_one(
         code, stdout, stderr = 1, "", str(exc)
 
     if code == 0 and stdout.strip():
-        md = clean_markdown_output(stdout)
+        md = apply_summary_frontmatter(
+            clean_markdown_output(stdout),
+            paper=paper,
+            key=key,
+            pdf_path=rel_pdf_yaml,
+            status="complete",
+        )
         fields = parse_frontmatter(md)
         if fields.get("bibtex_key") != key:
             summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "needs_review"))
@@ -309,83 +350,59 @@ def summarize_one(
 
     raise SystemExit(f"ERROR: Gemini failed for {key}: {stderr.strip()[:500]}")
 
-def read_index(json_path: Path) -> list[dict]:
-    if not json_path.exists():
-        return []
-    try:
-        return json.loads(json_path.read_text(encoding="utf-8")).get("papers", [])
-    except Exception:
-        return []
-
-def write_index(ref_dir: Path, rows: list[dict]) -> None:
-    ref_dir.mkdir(parents=True, exist_ok=True)
-    json_path = ref_dir / "index.json"
-    json_path.write_text(json.dumps({"papers": rows}, indent=2, ensure_ascii=False) + "\n")
-
-def upsert_index_row(
-    ref_dir: Path,
-    key: str,
-    title: str,
-    location: str,
-    year: object,
-    summary: str,
-    status: str,
-) -> dict:
-    rows = read_index(ref_dir / "index.json")
-    rows_by_key = {row.get("bibtex_key", ""): row for row in rows if row.get("bibtex_key")}
-    row = {
-        "bibtex_key": key,
-        "title": title,
-        "location": location,
-        "year": str(year or ""),
-        "summary": summary,
-        "status": status,
-    }
-    rows_by_key[key] = row
-    ordered = sorted(rows_by_key.values(), key=lambda item: (item.get("title", ""), item.get("bibtex_key", "")))
-    write_index(ref_dir, ordered)
-    return row
-
-def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--workspace", required=True)
-    p.add_argument("--pool", required=True)
-    p.add_argument("--gemini-command", default="gemini")
-    p.add_argument("--timeout", type=int, default=600)
-    p.add_argument("--download-timeout", type=int, default=45)
-    p.add_argument("--force", action="store_true")
-    p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--fallback-on-error", action="store_true")
-    p.add_argument(
-        "--user-agent",
-        default="PaperOrchestra literature-review-agent reference enrichment",
-    )
-    args = p.parse_args()
-
-    workspace = Path(args.workspace)
-    pool_path = Path(args.pool)
+def build_reference_database(
+    pool_path: Path,
+    gemini_command: str,
+    timeout: int,
+    download_timeout: int,
+    force: bool,
+    dry_run: bool,
+    fallback_on_error: bool,
+    user_agent: str,
+) -> int:
+    pool_path = pool_path.resolve()
+    workspace = pool_path.parent
 
     if not pool_path.exists():
         sys.exit(f"ERROR: Pool file not found: {pool_path}")
 
-    with open(pool_path, "r", encoding="utf-8") as f:
+    with pool_path.open("r", encoding="utf-8") as f:
         pool_data = json.load(f)
-    
-    papers = pool_data.get("papers", [])
-    if not papers:
-        papers = pool_data if isinstance(pool_data, list) else []
 
+    papers = pool_papers(pool_data)
     if not papers:
         print("No papers found in pool.")
         return 0
 
+    ensure_keys(papers)
+
     ref_dir = workspace / "reference_database"
+    maintenance = maintain_reference_database(workspace=workspace, papers=papers, fix=True)
+    keys_to_regenerate = {paper["bibtex_key"] for paper in papers} if force else maintenance.regenerate_keys
+
+    if maintenance.changed:
+        print(f"Maintenance: synchronized {maintenance.index_path}")
+    if keys_to_regenerate:
+        print(f"Regenerating {len(keys_to_regenerate)} missing or corrupt references.")
+    else:
+        print("No missing or corrupt references found.")
+
+    for problem in maintenance.problems:
+        key = Path(problem.split(":", 1)[0]).stem if ":" in problem else ""
+        if key in keys_to_regenerate:
+            print(f"WARN: {problem}", file=sys.stderr)
 
     for i, paper in enumerate(papers):
         title = paper.get("title", "Unknown Title")
+        key = ensure_key(paper)
+
+        if key not in keys_to_regenerate:
+            print(f"\n--- Skipping paper {i+1}/{len(papers)}: {title} ({key}) ---")
+            print(f"[{key}] Reference summary is already valid.")
+            continue
+
         print(f"\n--- Enriching paper {i+1}/{len(papers)}: {title} ---")
 
-        key = ensure_key(paper)
         pdf_path = ref_dir / "papers" / f"{key}.pdf"
         summary_path = ref_dir / "summaries" / f"{key}.md"
         prompt_path = ref_dir / "prompts" / f"{key}.prompt.txt"
@@ -393,9 +410,9 @@ def main():
         pdf_record = download_one(
             paper=paper,
             pdf_path=pdf_path,
-            timeout=args.download_timeout,
-            user_agent=args.user_agent,
-            force=args.force,
+            timeout=download_timeout,
+            user_agent=user_agent,
+            force=force,
         )
         summary_record = summarize_one(
             paper=paper,
@@ -404,11 +421,11 @@ def main():
             summary_path=summary_path,
             prompt_path=prompt_path,
             pdf_path=pdf_path,
-            gemini_command=args.gemini_command,
-            timeout=args.timeout,
-            force=args.force,
-            dry_run=args.dry_run,
-            fallback_on_error=args.fallback_on_error,
+            gemini_command=gemini_command,
+            timeout=timeout,
+            force=True,
+            dry_run=dry_run,
+            fallback_on_error=fallback_on_error,
         )
 
         result = {
@@ -429,26 +446,41 @@ def main():
                 except ValueError:
                     pass
 
-        location = result.get("summary_md_path") or ""
-        status = ";".join([
-            result.get("summary_status", "summary_missing"),
-            result.get("pdf_status", "pdf_missing"),
-        ])
-        tech_summary = extract_technical_summary(summary_path)
-        upsert_index_row(
-            ref_dir=ref_dir,
-            key=key,
-            title=paper.get("title", ""),
-            location=location,
-            year=paper.get("year", ""),
-            summary=tech_summary,
-            status=status,
-        )
-
         print(f"[{key}] PDF: {pdf_record['pdf_status']} | Summary: {summary_record['summary_status']}")
+
+    final_maintenance = maintain_reference_database(workspace=workspace, papers=papers, fix=True)
+    if final_maintenance.changed:
+        print(f"\nMaintenance: synchronized {final_maintenance.index_path}")
 
     print("\nBatch enrichment complete.")
     return 0
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--pool", required=True)
+    p.add_argument("--gemini-command", default="gemini")
+    p.add_argument("--timeout", type=int, default=600)
+    p.add_argument("--download-timeout", type=int, default=45)
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--fallback-on-error", action="store_true")
+    p.add_argument(
+        "--user-agent",
+        default="PaperOrchestra literature-review-agent reference enrichment",
+    )
+    args = p.parse_args()
+
+    return build_reference_database(
+        pool_path=Path(args.pool),
+        gemini_command=args.gemini_command,
+        timeout=args.timeout,
+        download_timeout=args.download_timeout,
+        force=args.force,
+        dry_run=args.dry_run,
+        fallback_on_error=args.fallback_on_error,
+        user_agent=args.user_agent,
+    )
 
 if __name__ == "__main__":
     sys.exit(main())
