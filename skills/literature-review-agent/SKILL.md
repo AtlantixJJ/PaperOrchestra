@@ -241,15 +241,7 @@ The literature review step MUST produce a local reference-paper database before
 building `refs.bib`. This database is the source of detailed paper summaries
 used by the writing step and by later manual review.
 
-First assign canonical BibTeX keys, because the database uses those keys for
-PDF and Markdown filenames:
-
-```bash
-python skills/literature-review-agent/scripts/assign_bibtex_keys.py \
-    --pool workspace/citation_pool.json
-```
-
-Then run the batch enrichment script to download PDFs, call Gemini to generate
+Run the batch enrichment script to download PDFs, call Gemini to generate
 Markdown summaries for missing or corrupt references, and update the index.
 This one-call wrapper handles all iterative JSON parsing and PDF mechanics automatically.
 
@@ -298,15 +290,14 @@ python skills/literature-review-agent/scripts/bibtex_format.py \
     --out workspace/refs.bib
 ```
 
-The script uses the same deterministic keys assigned in Step 4 and writes out
-only `@article` / `@inproceedings` / `@misc` entries — never invents fields.
-It also writes the canonical `bibtex_key` back into each paper record in
-`citation_pool.json`, which should be idempotent after `assign_bibtex_keys.py`.
+The script assigns canonical BibTeX keys and writes out only `@article` /
+`@inproceedings` / `@misc` entries — never invents fields. It also writes the
+canonical `bibtex_key` back into each paper record in `citation_pool.json`.
 
 The required pipeline is now:
 
 ```
-dedupe_by_id → validate_pool --fix → assign_bibtex_keys → build_reference_database → maintain_reference_database → bibtex_format
+dedupe_by_id → validate_pool --fix → build_reference_database → maintain_reference_database → bibtex_format
 ```
 
 ### 6. Draft Introduction + Related Work
@@ -403,7 +394,6 @@ If your host has no web search tool, switch to degraded mode:
 - `scripts/pre_dedup_candidates.py` — **NEW** dedup Phase 1 candidates before Phase 2 (saves 30-40% S2 quota)
 - `scripts/s2_cache.py` — **NEW** persistent S2 response cache (eliminates re-verification on re-runs)
 - `scripts/validate_pool.py` — **NEW** validate & auto-fix citation_pool.json schema (authors format)
-- `scripts/assign_bibtex_keys.py` — assign canonical keys before reference database enrichment
 - `scripts/sync_keys.py` — sync cite keys in .tex with canonical bibtex_keys after drafting
 - `scripts/levenshtein_match.py` — fuzzy title match (ratio > 70)
 - `scripts/check_cutoff.py` — date cmp w/ month → day-1 default
