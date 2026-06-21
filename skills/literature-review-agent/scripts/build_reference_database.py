@@ -8,7 +8,7 @@ The script handles all mechanics for every verified paper:
 
 1. assign or preserve a stable bibtex_key,
 2. download/cache the PDF when an open PDF URL is available,
-3. call Gemini CLI to create the structured Markdown summary,
+3. call agy to create the structured Markdown summary,
 4. run reference-database maintenance so index.json reflects summaries.
 
 Usage:
@@ -81,7 +81,7 @@ def fetch_pdf(url: str, out_path: Path, timeout: int, user_agent: str) -> tuple[
     return True, f"{len(data)} bytes"
 
 
-# --- Inlined from summarize_papers_gemini.py ---
+# --- Inlined from summarize_papers_gemini.py; this wrapper defaults to agy ---
 SCRIPT_DIR = Path(__file__).parent.resolve()
 try:
     TEMPLATE = (SCRIPT_DIR.parent / "references" / "summary_template.md").read_text(encoding="utf-8")
@@ -135,7 +135,7 @@ def fallback_summary(paper: dict, key: str, pdf_path: str, status: str) -> str:
     )
     body = body.replace(
         "(Make this detailed, self-contained, mathematically rich and rigorous.)",
-        "TODO: Replace this metadata-only placeholder with a detailed Gemini summary.",
+        "TODO: Replace this metadata-only placeholder with a detailed agy summary.",
         1,
     )
     body = body.replace("(Include concrete numbers and metrics.)", "TODO", 1)
@@ -254,7 +254,7 @@ def summarize_one(
     summary_path: Path,
     prompt_path: Path,
     pdf_path: Path,
-    gemini_command: str,
+    summary_command: str,
     timeout: int,
     force: bool,
     dry_run: bool,
@@ -302,7 +302,7 @@ def summarize_one(
         return record
 
     try:
-        code, stdout, stderr = run_subagent(gemini_command, prompt, timeout, workspace, f"summary_{key}")
+        code, stdout, stderr = run_subagent(summary_command, prompt, timeout, workspace, f"summary_{key}")
     except Exception as exc:
         code, stdout, stderr = 1, "", str(exc)
 
@@ -321,7 +321,7 @@ def summarize_one(
                 "summary_status": "needs_review",
                 "summary_md_path": str(summary_path),
                 "prompt_path": str(prompt_path),
-                "summary_message": "Gemini output bibtex_key did not match canonical key",
+                "summary_message": "summary output bibtex_key did not match canonical key",
             })
             return record
 
@@ -334,25 +334,25 @@ def summarize_one(
             "summary_md_path": str(summary_path),
             "prompt_path": str(prompt_path),
             "one_word_summary": fields.get("one_word_summary", ""),
-            "summary_message": "Gemini summary written",
+            "summary_message": "agy summary written",
         })
         return record
 
     if fallback_on_error:
-        summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "gemini_failed"))
+        summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "agy_failed"))
         record.update({
-            "summary_status": "gemini_failed",
+            "summary_status": "agy_failed",
             "summary_md_path": str(summary_path),
             "prompt_path": str(prompt_path),
             "summary_message": stderr.strip()[:500],
         })
         return record
 
-    raise SystemExit(f"ERROR: Gemini failed for {key}: {stderr.strip()[:500]}")
+    raise SystemExit(f"ERROR: summary command failed for {key}: {stderr.strip()[:500]}")
 
 def build_reference_database(
     pool_path: Path,
-    gemini_command: str,
+    summary_command: str,
     timeout: int,
     download_timeout: int,
     force: bool,
@@ -421,7 +421,7 @@ def build_reference_database(
             summary_path=summary_path,
             prompt_path=prompt_path,
             pdf_path=pdf_path,
-            gemini_command=gemini_command,
+            summary_command=summary_command,
             timeout=timeout,
             force=True,
             dry_run=dry_run,
@@ -459,7 +459,8 @@ def build_reference_database(
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--pool", required=True)
-    p.add_argument("--gemini-command", default="gemini")
+    p.add_argument("--summary-command", default="agy")
+    p.add_argument("--gemini-command", help="Deprecated alias for --summary-command.")
     p.add_argument("--timeout", type=int, default=600)
     p.add_argument("--download-timeout", type=int, default=45)
     p.add_argument("--force", action="store_true")
@@ -473,7 +474,7 @@ def main():
 
     return build_reference_database(
         pool_path=Path(args.pool),
-        gemini_command=args.gemini_command,
+        summary_command=args.gemini_command or args.summary_command,
         timeout=args.timeout,
         download_timeout=args.download_timeout,
         force=args.force,

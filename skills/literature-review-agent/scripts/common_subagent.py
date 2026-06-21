@@ -209,7 +209,7 @@ def extract_model_response(input_path: Path) -> str:
 
 def run_subagent(command: str, prompt: str, timeout: int, cwd: Path, log_name: str) -> tuple[int, str, str]:
     """
-    Run a subagent command (e.g. Gemini CLI), capturing stdout/stderr
+    Run a subagent command (e.g. agy or Gemini CLI), capturing stdout/stderr
     and saving logs, metadata, and prompts into a ./logs folder just
     like the run_subagent shell script.
     """
@@ -226,7 +226,9 @@ def run_subagent(command: str, prompt: str, timeout: int, cwd: Path, log_name: s
     cmd = shlex.split(command)
     
     backend = cmd[0].lower()
-    if backend == "gemini" and "--output-format" not in command:
+    if backend == "agy" and not any(flag in command for flag in ("-p", "--print", "--prompt")):
+        cmd.extend(["-p", prompt])
+    elif backend == "gemini" and "--output-format" not in command:
         cmd.extend(["-y", "--output-format", "stream-json", "-p", prompt])
     elif backend == "codex" and "--json" not in command:
         cmd.extend(["exec", "--ephemeral", "--json", prompt])

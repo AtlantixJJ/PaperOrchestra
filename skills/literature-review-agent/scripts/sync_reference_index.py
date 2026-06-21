@@ -141,7 +141,7 @@ def build_rows(
         status_parts = []
         status_parts.append("summary_ok" if summary_path.exists() else "summary_missing")
         status_parts.append("pdf_ok" if pdf_path.exists() else "pdf_missing")
-        if fm.get("summary_status") in ("missing", "gemini_failed", "needs_review", "prompt_only"):
+        if fm.get("summary_status") in ("missing", "agy_failed", "gemini_failed", "needs_review", "prompt_only"):
             status_parts.append(fm["summary_status"])
 
         tech_summary = extract_technical_summary(summary_path)

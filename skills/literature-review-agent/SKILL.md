@@ -241,7 +241,7 @@ The literature review step MUST produce a local reference-paper database before
 building `refs.bib`. This database is the source of detailed paper summaries
 used by the writing step and by later manual review.
 
-Run the batch enrichment script to download PDFs, call Gemini to generate
+Run the batch enrichment script to download PDFs, call `agy` to generate
 Markdown summaries for missing or corrupt references, and update the index.
 This one-call wrapper handles all iterative JSON parsing and PDF mechanics automatically.
 
@@ -402,7 +402,7 @@ If your host has no web search tool, switch to degraded mode:
 - `scripts/citation_coverage.py` — ≥90% citation coverage gate
 - `scripts/s2_search.py` — **NEW** Semantic Scholar title-search helper; reads `SEMANTIC_SCHOLAR_API_KEY` from env (optional — falls back to unauthenticated)
 - `scripts/exa_search.py` — optional Exa Phase 1 backend (reads `EXA_API_KEY` from env)
-- `scripts/build_reference_database.py` — required batch wrapper that downloads PDFs, calls Gemini, writes Markdown summaries, and updates the index for all verified papers
+- `scripts/build_reference_database.py` — required batch wrapper that downloads PDFs, calls `agy`, writes Markdown summaries, and updates the index for all verified papers
 - `scripts/download_papers.py` — lower-level PDF downloader used by the enrichment wrapper
-- `scripts/summarize_papers_gemini.py` — lower-level Gemini summarizer used by the enrichment wrapper
+- `scripts/summarize_papers_gemini.py` — legacy lower-level Gemini summarizer; the enrichment wrapper now defaults to `agy`
 - `scripts/sync_reference_index.py` — required database sync gate for Markdown summaries and index files
