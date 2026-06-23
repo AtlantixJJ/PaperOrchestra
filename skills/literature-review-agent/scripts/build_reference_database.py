@@ -287,9 +287,7 @@ def summarize_one(
         metadata=metadata,
         pdf_path=pdf_for_prompt or "(no local PDF available)",
     )
-    prompt_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
-    prompt_path.write_text(prompt)
 
     if dry_run:
         summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "prompt_only"))

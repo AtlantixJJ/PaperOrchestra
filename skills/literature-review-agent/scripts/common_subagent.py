@@ -221,8 +221,6 @@ def run_subagent(command: str, prompt: str, timeout: int, cwd: Path, log_name: s
     meta_path = log_dir / f"{log_name}.meta"
     md_path = log_dir / f"{log_name}.md"
     
-    prompt_path.write_text(prompt, encoding="utf-8")
-    
     cmd = shlex.split(command)
     
     backend = cmd[0].lower()
@@ -240,21 +238,32 @@ def run_subagent(command: str, prompt: str, timeout: int, cwd: Path, log_name: s
     meta_content = f"backend={backend}\ncwd={cwd}\nlog={log_path}\nprompt_file={prompt_path}\ncmd={shlex.join(cmd)}\n"
     meta_path.write_text(meta_content, encoding="utf-8")
     
-    proc = subprocess.run(
-        cmd,
-        cwd=str(cwd),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout,
-    )
-    
+    print(f"Executing subagent: {shlex.join(cmd)}")
     with open(log_path, "w", encoding="utf-8") as f:
-        f.write(proc.stdout)
-        if proc.stderr:
-            f.write("\n--- STDERR ---\n")
-            f.write(proc.stderr)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            text=True,
+            bufsize=1,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        stdout_chunks = []
+        for char in iter(lambda: proc.stdout.read(1), ""):
+            f.write(char)
+            f.flush()
+            stdout_chunks.append(char)
             
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            
+    proc_stdout = "".join(stdout_chunks)
+    proc_stderr = ""
+    proc_returncode = proc.returncode
+    
     # Generate the Markdown transcript
     try:
         md_content = parse_log_to_markdown(log_path)
@@ -267,8 +276,8 @@ def run_subagent(command: str, prompt: str, timeout: int, cwd: Path, log_name: s
     if backend in ("gemini", "codex"):
         clean_stdout = extract_model_response(log_path)
         if not clean_stdout.strip(): # Fallback if parsing failed
-            clean_stdout = proc.stdout
+            clean_stdout = proc_stdout
     else:
-        clean_stdout = proc.stdout
+        clean_stdout = proc_stdout
             
-    return proc.returncode, clean_stdout, proc.stderr
+    return proc_returncode, clean_stdout, proc_stderr

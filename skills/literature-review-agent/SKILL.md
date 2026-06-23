@@ -246,7 +246,7 @@ Markdown summaries for missing or corrupt references, and update the index.
 This one-call wrapper handles all iterative JSON parsing and PDF mechanics automatically.
 
 ```bash
-python skills/literature-review-agent/scripts/build_reference_database.py \
+python -u skills/literature-review-agent/scripts/build_reference_database.py \
     --pool workspace/citation_pool.json
 ```
 
