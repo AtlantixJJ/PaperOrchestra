@@ -25,8 +25,8 @@ Inputs
   - outline.json: Your MASTER PLAN. Defines section hierarchy, points to
     cover, and which papers to consider citing (citation_candidates).
   - idea.md: Technical details of the methodology.
-  - experimental_log.md: Raw data for tables and qualitative analysis for
-    text.
+  - experiments/: Raw data for tables and qualitative analysis for
+    text (folder of .md files; read all filename-sorted and concatenate).
   - citation_map.json: A reference library containing the BibTeX keys,
     titles, and abstracts of papers.
   - conference_guidelines.md: Formatting rules.
@@ -43,7 +43,7 @@ Critical Instructions
 
 2. Data & Tables:
    - You are responsible for creating LaTeX tables.
-   - Extract numerical data directly from experimental_log.md.
+   - Extract numerical data directly from experiments/ (all .md files, concatenated filename-sorted).
    - Use the booktabs package format (\toprule, \midrule, \bottomrule).
    - Do not hallucinate numbers. Use the exact values provided in the log.
    - Make sure all tables appear before the Conclusion section, unless they

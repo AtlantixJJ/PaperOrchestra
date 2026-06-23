@@ -135,7 +135,7 @@ def fallback_summary(paper: dict, key: str, pdf_path: str, status: str) -> str:
     )
     body = body.replace(
         "(Make this detailed, self-contained, mathematically rich and rigorous.)",
-        "TODO: Replace this metadata-only placeholder with a detailed agy summary.",
+        "TODO: Replace this metadata-only placeholder with a detailed LLM summary.",
         1,
     )
     body = body.replace("(Include concrete numbers and metrics.)", "TODO", 1)
@@ -259,6 +259,7 @@ def summarize_one(
     force: bool,
     dry_run: bool,
     fallback_on_error: bool,
+    mode: str,
 ) -> dict:
     record = {
         "summary_status": "missing",
@@ -279,13 +280,27 @@ def summarize_one(
         })
         return record
 
-    pdf_for_prompt = str(pdf_path.resolve()) if pdf_path.exists() else ""
     rel_pdf_yaml = f"papers/{key}.pdf" if pdf_path.exists() else ""
     metadata = json.dumps(paper, indent=2, ensure_ascii=False)
+    
+    if mode == "llm":
+        if pdf_path.exists():
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(str(pdf_path))
+                pdf_text = "".join(page.extract_text() or "" for page in reader.pages)
+                pdf_info = f"Extracted PDF Text:\n{pdf_text[:150000]}"
+            except Exception as e:
+                pdf_info = f"(Failed to extract text from PDF: {e})"
+        else:
+            pdf_info = "(no local PDF available)"
+    else:
+        pdf_info = str(pdf_path.resolve()) if pdf_path.exists() else "(no local PDF available)"
+
     prompt = PROMPT.format(
         summary_template=TEMPLATE.rstrip(),
         metadata=metadata,
-        pdf_path=pdf_for_prompt or "(no local PDF available)",
+        pdf_path=pdf_info,
     )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -299,10 +314,40 @@ def summarize_one(
         })
         return record
 
-    try:
-        code, stdout, stderr = run_subagent(summary_command, prompt, timeout, workspace, f"summary_{key}")
-    except Exception as exc:
-        code, stdout, stderr = 1, "", str(exc)
+    if mode == "llm":
+        try:
+            import os
+            from dotenv import load_dotenv, find_dotenv
+            import litellm
+
+            # Attempt to load from parent directories if not already set
+            if not os.environ.get("LITELLM_API_KEY"):
+                load_dotenv(find_dotenv(usecwd=True))
+                if not os.environ.get("LITELLM_API_KEY"):
+                    # Fallback to absolute path
+                    load_dotenv("/Users/atlantix/Desktop/3DV 2027/.env")
+
+            base_url = os.environ.get("LITELLM_BASE_URL")
+            llm_model = os.environ.get("LITELLM_TEXT_MODEL", "gemini-2.5-pro")
+            api_key = os.environ.get("LITELLM_API_KEY")
+
+            # Use openai/ prefix to route properly via litellm to an OpenAI-compatible proxy if base_url is set
+            model_name = f"openai/{llm_model}" if base_url else llm_model
+
+            response = litellm.completion(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                api_base=base_url,
+                api_key=api_key,
+            )
+            code, stdout, stderr = 0, response.choices[0].message.content, ""
+        except Exception as exc:
+            code, stdout, stderr = 1, "", str(exc)
+    else:
+        try:
+            code, stdout, stderr = run_subagent(summary_command, prompt, timeout, workspace, f"summary_{key}")
+        except Exception as exc:
+            code, stdout, stderr = 1, "", str(exc)
 
     if code == 0 and stdout.strip():
         md = apply_summary_frontmatter(
@@ -332,14 +377,14 @@ def summarize_one(
             "summary_md_path": str(summary_path),
             "prompt_path": str(prompt_path),
             "one_word_summary": fields.get("one_word_summary", ""),
-            "summary_message": "agy summary written",
+            "summary_message": "LLM summary written" if mode == "llm" else "agy summary written",
         })
         return record
 
     if fallback_on_error:
-        summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "agy_failed"))
+        summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "llm_failed" if mode == "llm" else "agy_failed"))
         record.update({
-            "summary_status": "agy_failed",
+            "summary_status": "llm_failed" if mode == "llm" else "agy_failed",
             "summary_md_path": str(summary_path),
             "prompt_path": str(prompt_path),
             "summary_message": stderr.strip()[:500],
@@ -357,6 +402,7 @@ def build_reference_database(
     dry_run: bool,
     fallback_on_error: bool,
     user_agent: str,
+    mode: str,
 ) -> int:
     pool_path = pool_path.resolve()
     workspace = pool_path.parent
@@ -424,6 +470,7 @@ def build_reference_database(
             force=True,
             dry_run=dry_run,
             fallback_on_error=fallback_on_error,
+            mode=mode,
         )
 
         result = {
@@ -468,6 +515,7 @@ def main():
         "--user-agent",
         default="PaperOrchestra literature-review-agent reference enrichment",
     )
+    p.add_argument("--mode", choices=["agent", "llm"], default="agent", help="Mode for calling LLM: 'agent' (CLI wrapper) or 'llm' (direct SDK with PDF text)")
     args = p.parse_args()
 
     return build_reference_database(
@@ -479,6 +527,7 @@ def main():
         dry_run=args.dry_run,
         fallback_on_error=args.fallback_on_error,
         user_agent=args.user_agent,
+        mode=args.mode,
     )
 
 if __name__ == "__main__":

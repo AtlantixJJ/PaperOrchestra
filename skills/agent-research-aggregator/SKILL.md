@@ -1,6 +1,6 @@
 ---
 name: agent-research-aggregator
-description: Pre-pipeline aggregator that scans AI agent cache directories (.claude, .cursor, .antigravity, .openclaw) or any user-specified directory for experimentation logs, extracts insights and numeric results, and formats them as PaperOrchestra-ready inputs (idea.md + experimental_log.md). TRIGGER when the user says "aggregate my agent logs for paper writing", "extract experiments from my coding agent history", "prepare PaperOrchestra inputs from my cache", "turn my agent logs into a paper", mentions a folder or directory they want to use as the basis for a paper, or wants to run PaperOrchestra but only has scattered agent experiment histories rather than structured inputs. Run this BEFORE paper-orchestra. Also called automatically by paper-orchestra when workspace/inputs/idea.md or workspace/inputs/experimental_log.md are missing.
+description: Pre-pipeline aggregator that scans AI agent cache directories (.claude, .cursor, .antigravity, .openclaw) or any user-specified directory for experimentation logs, extracts insights and numeric results, and formats them as PaperOrchestra-ready inputs (idea.md + experiments/ folder). TRIGGER when the user says "aggregate my agent logs for paper writing", "extract experiments from my coding agent history", "prepare PaperOrchestra inputs from my cache", "turn my agent logs into a paper", mentions a folder or directory they want to use as the basis for a paper, or wants to run PaperOrchestra but only has scattered agent experiment histories rather than structured inputs. Run this BEFORE paper-orchestra. Also called automatically by paper-orchestra when workspace/inputs/idea.md or workspace/inputs/experiments/ are missing.
 ---
 
 # agent-research-aggregator
@@ -13,10 +13,10 @@ Before starting Phase 1, check whether aggregation is actually needed:
 
 | Situation | Action |
 |---|---|
-| `workspace/inputs/idea.md` **and** `workspace/inputs/experimental_log.md` both exist and are non-empty | **Skip this skill entirely.** Proceed directly to `paper-orchestra`. |
-| Either file is missing or empty, **and** the user provided a directory path | **Run this skill** with that directory as `--search-roots`. |
-| Either file is missing or empty, **and** no directory was provided | Scan cwd and `~` by default; show the discovery summary to the user before continuing. |
-| The inputs exist but look thin (e.g. idea.md has < 5 lines, no numeric data in experimental_log.md) | **Ask the user** whether to supplement with aggregation or proceed as-is. |
+| `workspace/inputs/idea.md` exists and `workspace/inputs/experiments/` is non-empty | **Skip this skill entirely.** Proceed directly to `paper-orchestra`. |
+| Either is missing/empty, **and** the user provided a directory path | **Run this skill** with that directory as `--search-roots`. |
+| Either is missing/empty, **and** no directory was provided | Scan cwd and `~` by default; show the discovery summary to the user before continuing. |
+| The inputs exist but look thin (e.g. idea.md has < 5 lines, no numeric data in any `experiments/` file) | **Ask the user** whether to supplement with aggregation or proceed as-is. |
 
 The skill is intentionally a pre-pass — it is cheap to skip and should only run when the structured inputs don't already exist.
 
@@ -52,8 +52,8 @@ them into the structured `(I, E)` input pair the PaperOrchestra pipeline expects
              ┌────────────┴────────────┐
       workspace/inputs/         workspace/ara/
         idea.md                   aggregation_report.md
-        experimental_log.md       discovered_logs.json
-                                  raw_experiments.json
+        experiments/              discovered_logs.json
+          aggregated.md             raw_experiments.json
                                   synthesis.json
 ```
 
@@ -216,7 +216,7 @@ python skills/agent-research-aggregator/scripts/format_po_inputs.py \
     --out workspace/inputs/
 ```
 
-This generates two files:
+This generates two outputs:
 
 ### `workspace/inputs/idea.md` (Sparse variant)
 
@@ -241,9 +241,10 @@ Follows the PaperOrchestra Sparse Idea format (arXiv:2604.05018, §3.1):
 <open_questions, if any>
 ```
 
-### `workspace/inputs/experimental_log.md`
+### `workspace/inputs/experiments/aggregated.md`
 
-Follows the PaperOrchestra Experimental Log format (App. D.3):
+Written into the `experiments/` folder (created if absent). Follows the
+PaperOrchestra Experimental Log format (App. D.3):
 
 ```markdown
 ## 1. Experimental Setup
@@ -259,11 +260,14 @@ Follows the PaperOrchestra Experimental Log format (App. D.3):
 <iteration_history as an ordered narrative, if present>
 ```
 
-After running the script, **review both files** with the user:
+The user may add additional per-experiment `.md` files to `experiments/` at
+any time; all files in the folder are merged by downstream agents.
+
+After running the script, **review both outputs** with the user:
 
 1. Read `workspace/inputs/idea.md` aloud and ask: "Does this accurately capture
    your research question and method?"
-2. Read the table headers from `workspace/inputs/experimental_log.md` and ask:
+2. Read the table headers from `workspace/inputs/experiments/aggregated.md` and ask:
    "Are these the correct metrics and baselines?"
 
 Revise based on feedback before proceeding to PaperOrchestra.
@@ -296,13 +300,13 @@ them before running paper-orchestra — garbage in, garbage out.
 
 ## Handoff to PaperOrchestra
 
-Once the user has confirmed `idea.md` and `experimental_log.md`, the workspace
+Once the user has confirmed `idea.md` and the `experiments/` files, the workspace
 is ready for the paper-orchestra pipeline. You still need:
 
 | File | Status | Action |
 |---|---|---|
 | `workspace/inputs/idea.md` | ✓ generated | user review recommended |
-| `workspace/inputs/experimental_log.md` | ✓ generated | user review recommended |
+| `workspace/inputs/experiments/aggregated.md` | ✓ generated | user review recommended |
 | `workspace/inputs/template.tex` | **MISSING** | ask user to provide their conference LaTeX template |
 | `workspace/inputs/conference_guidelines.md` | **MISSING** | ask user to provide (page limit, deadline, formatting rules) |
 
@@ -327,7 +331,7 @@ Tell the user exactly which two files are still needed, then offer to run
 ## Hard rules (never violate)
 
 1. **Never write to agent cache directories.** This skill is read-only on `.claude/`, `.cursor/`, `.antigravity/`, `.openclaw/`.
-2. **Never include personal information** (emails, names, credentials, API keys) in generated `idea.md` or `experimental_log.md`. The extraction prompt instructs the LLM to strip PII; double-check before handoff.
+2. **Never include personal information** (emails, names, credentials, API keys) in generated `idea.md` or `experiments/` files. The extraction prompt instructs the LLM to strip PII; double-check before handoff.
 3. **Never fabricate results.** If a metric appears in only one log with low confidence, mark it `[UNVERIFIED]` in the table rather than silently including it.
 4. **Never proceed past Phase 1 without user confirmation** of the discovered file list if the scan found > 50 files.
 

@@ -20,7 +20,7 @@ will receive:
   - paper.tex: The current LaTeX source code.
   - paper.pdf: The compiled PDF context.
   - conference_guidelines.md: The formatting and page limit rules.
-  - experimental_log.md: The Ground Truth for all data and metrics.
+  - experiments/: The Ground Truth for all data and metrics (folder of .md files, read all filename-sorted).
   - worklog.json: History of previous changes.
   - citation_map.json: The allowed bibliography.
   - reviewer_feedback: A JSON object containing specific Strengths,
@@ -48,16 +48,16 @@ Critical Execution Standards
      - Answering Questions: Do NOT write a separate response letter. If the
        reviewer asks "What is the inference latency?", you must find a
        natural place in the paper (e.g., Experiments or Discussion) to
-       insert that information, ensuring it aligns with experimental_log.md.
+       insert that information, ensuring it aligns with experiments/.
      - Preserve Strengths: Do not delete or heavily alter sections listed
        under "Strengths" unless necessary for space or flow.
 
   2. Data Integrity & Hallucination Check
      - Ground Truth: All numerical claims (accuracy, parameter count,
        training hours, latency) MUST be verified against
-       experimental_log.md.
+       experiments/.
      - Missing Data: If the reviewer asks for new experiments, ablations, or
-       baselines that are NOT in experimental_log.md, simply ignore those
+       baselines that are NOT in experiments/, simply ignore those
        specific requests. Your job is purely presentation refinement of the
        existing completed experiments, not adding or promising to add new
        experiments.
@@ -109,7 +109,7 @@ Important Notes
     or partial snippets.
   - Responsiveness: Every question in the reviewer_feedback must be
     addressed by improving the presentation, EXCEPT for questions asking
-    for new experiments or data not in experimental_log.md (which should
+    for new experiments or data not in experiments/ (which should
     be ignored). Never explicitly state a limitation.
   - Safety: Do not remove the \documentclass or essential preamble.
 ```

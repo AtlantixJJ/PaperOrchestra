@@ -17,7 +17,7 @@ Anything else will fail `validate_outline.py`.
 | Value | Meaning |
 |---|---|
 | `"idea.md"` | The figure visualizes a concept or architecture from the idea (typically diagrams). |
-| `"experimental_log.md"` | The figure plots numeric values from the experimental log. |
+| `"experiments/"` | The figure plots numeric values from the experimental log (folder of .md files). |
 | `"both"` | The figure combines conceptual context with empirical data. |
 
 ## `aspect_ratio`

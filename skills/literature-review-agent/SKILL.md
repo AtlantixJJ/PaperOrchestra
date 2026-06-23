@@ -1,6 +1,6 @@
 ---
 name: literature-review-agent
-description: Step 3 of the PaperOrchestra pipeline (arXiv:2604.05018). Execute the literature search strategy from outline.json — discover candidate papers via web search, verify them through Semantic Scholar (Levenshtein > 70 fuzzy title match, temporal cutoff, dedup by paperId), build a BibTeX file, and draft Introduction + Related Work using ≥90% of the verified pool. Runs in parallel with the plotting-agent. TRIGGER when the orchestrator delegates Step 3 or when the user asks to "find citations for my paper", "draft the related work", or "build the bibliography".
+description: Step 3 of the PaperOrchestra pipeline (arXiv:2604.05018). Execute the literature search strategy from outline.json — discover candidate papers via web search, verify them through Semantic Scholar (Levenshtein strictly > 70 fuzzy title match, temporal cutoff, dedup by paperId), build a BibTeX file, and draft Introduction + Related Work using ≥90% of the verified pool. Runs in parallel with the plotting-agent. TRIGGER when the orchestrator delegates Step 3 or when the user asks to "find citations for my paper", "draft the related work", or "build the bibliography".
 ---
 
 # Literature Review Agent (Step 3)
@@ -18,8 +18,8 @@ limit.
   Introduction search directions and the 2-4 Related Work methodology
   clusters
 - `workspace/inputs/conference_guidelines.md` — used to derive `cutoff_date`
-- `workspace/inputs/idea.md`, `workspace/inputs/experimental_log.md` — for
-  framing the Intro and grounding the Related Work positioning
+- `workspace/inputs/idea.md` and all `.md` files under `workspace/inputs/experiments/` — for
+  framing the Intro and grounding the Related Work positioning (read all files in `experiments/`, concatenate in filename-sorted order)
 
 ## Outputs
 
@@ -56,7 +56,7 @@ PHASE 2 — Sequential Citation Verification (1 QPS, with cache)
         (Public endpoint, no key. Throttle to 1 QPS for live requests only.)
      2. Store the S2 response in cache: s2_cache.py --store.
      3. Pick the top hit. Check Levenshtein title ratio against the original
-        candidate title. If ratio < 70: discard.
+         candidate title. If ratio ≤ 70: discard (the threshold is strictly > 70).
      4. Bonus: if year and venue exactly align with hints, add a +5 point
         match-quality bonus.
      5. Require: abstract is non-empty.
@@ -173,7 +173,7 @@ python skills/literature-review-agent/scripts/s2_search.py --check-key
 
 **Fallback:** if you prefer your host's URL fetch tool, GET:
 ```
-https://api.semanticscholar.org/graph/v1/paper/search?query=<URL-encoded title>&limit=5&fields=title,abstract,year,authors,venue,externalIds
+https://api.semanticscholar.org/graph/v1/paper/search?query=<URL-encoded title>&limit=5&fields=title,abstract,year,authors,venue,externalIds,openAccessPdf
 ```
 Add header `x-api-key: <SEMANTIC_SCHOLAR_API_KEY>` if the env var is set.
 Be polite: ≤1 request per second for live requests. Cache hits are free.
@@ -192,7 +192,7 @@ For the top hit:
 python skills/literature-review-agent/scripts/levenshtein_match.py \
     --candidate "Original candidate title" \
     --found "S2 returned title"
-# prints integer 0-100. Discard if < 70.
+# prints "<ratio> PASS" or "<ratio> FAIL" (e.g., "85 PASS"). Discard if ≤ 70.
 ```
 
 Then check the temporal cutoff:
@@ -214,7 +214,7 @@ After all candidates are verified:
 
 ```bash
 python skills/literature-review-agent/scripts/dedupe_by_id.py \
-    --in raw_pool.json \
+    --in workspace/raw_pool.json \
     --out workspace/citation_pool.json
 ```
 
@@ -310,7 +310,7 @@ Substitute the template placeholders:
 |---|---|
 | `intro_related_work_plan` | full JSON object from `outline.json` |
 | `project_idea` | contents of `idea.md` |
-| `project_experimental_log` | contents of `experimental_log.md` |
+| `project_experimental_log` | concatenated contents of all `.md` files in `experiments/` (filename-sorted) |
 | `citation_checklist` | the BibTeX keys from `refs.bib` |
 | `collected_papers` | list of `{key, title, abstract}` from `citation_pool.json` |
 | `paper_count` | `len(citation_pool.papers)` |
@@ -362,7 +362,7 @@ them on the writing call:
   as prior baselines to beat. They are concurrent work only.
 - **EVALUATION RULE**: Do not claim our method beats / achieves SOTA over a
   specific cited paper UNLESS that paper is explicitly evaluated against in
-  `experimental_log.md`. Frame other recent papers strictly as concurrent,
+  the `experiments/` files. Frame other recent papers strictly as concurrent,
   orthogonal, or conceptual work.
 - **Output format**: return the full code for the updated `template.tex`,
   with the two empty sections (Introduction and Related Work) filled in,
@@ -395,7 +395,7 @@ If your host has no web search tool, switch to degraded mode:
 - `scripts/s2_cache.py` — **NEW** persistent S2 response cache (eliminates re-verification on re-runs)
 - `scripts/validate_pool.py` — **NEW** validate & auto-fix citation_pool.json schema (authors format)
 - `scripts/sync_keys.py` — sync cite keys in .tex with canonical bibtex_keys after drafting
-- `scripts/levenshtein_match.py` — fuzzy title match (ratio > 70)
+- `scripts/levenshtein_match.py` — fuzzy title match (ratio strictly > 70)
 - `scripts/check_cutoff.py` — date cmp w/ month → day-1 default
 - `scripts/dedupe_by_id.py` — dedup verified pool by S2 paperId
 - `scripts/bibtex_format.py` — build refs.bib from JSON pool
@@ -403,6 +403,8 @@ If your host has no web search tool, switch to degraded mode:
 - `scripts/s2_search.py` — **NEW** Semantic Scholar title-search helper; reads `SEMANTIC_SCHOLAR_API_KEY` from env (optional — falls back to unauthenticated)
 - `scripts/exa_search.py` — optional Exa Phase 1 backend (reads `EXA_API_KEY` from env)
 - `scripts/build_reference_database.py` — required batch wrapper that downloads PDFs, calls `agy`, writes Markdown summaries, and updates the index for all verified papers
-- `scripts/download_papers.py` — lower-level PDF downloader used by the enrichment wrapper
-- `scripts/summarize_papers_gemini.py` — legacy lower-level Gemini summarizer; the enrichment wrapper now defaults to `agy`
-- `scripts/sync_reference_index.py` — required database sync gate for Markdown summaries and index files
+- `scripts/common_subagent.py` — internal module imported by `build_reference_database.py`; provides `run_subagent()` for invoking `agy` subagents
+- `scripts/sync_reference_index.py` — internal dependency of `maintain_reference_database.py`; synchronizes `index.json` with summary files (not called directly in the pipeline)
+- `scripts/maintain_reference_database.py` — maintenance wrapper that checks pool/summary alignment and invokes regeneration
+- `references/summary_prompt.txt` — prompt template used by `build_reference_database.py` for paper summarization
+- `references/summary_template.md` — Markdown structure template for paper summaries

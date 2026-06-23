@@ -68,63 +68,96 @@ Combine all results across all queries into a single `raw_candidates.json`:
 }
 ```
 
+### Pre-dedup before Phase 2
+
+**Always run this before starting Phase 2.** Multiple search queries routinely
+return the same papers. Verifying duplicates wastes 30-40% of S2 quota at
+1 QPS.
+
+```bash
+python scripts/pre_dedup_candidates.py \
+    --in workspace/raw_candidates.json \
+    --out workspace/deduped_candidates.json
+```
+
+Use `workspace/deduped_candidates.json` as input to Phase 2.
+
 ## Phase 2 — Sequential Verification via Semantic Scholar
 
 The paper enforces strict sequential verification at ≤1 QPS via the public
 Semantic Scholar API. We follow the same constraint.
 
+### S2 response cache
+
+Before each live S2 request, check the local cache to avoid redundant calls:
+
+```bash
+# Check cache first (no S2 call, no throttle needed):
+python scripts/s2_cache.py --cache workspace/cache/s2_cache.json --check "<title>"
+# exit 0 + prints JSON → use cached response, skip live request
+# exit 1 → proceed to live request below
+```
+
+After every successful live S2 request, store the response:
+
+```bash
+python scripts/s2_cache.py --cache workspace/cache/s2_cache.json \
+    --store "<title>" --response '<full S2 JSON>'
+```
+
 ### Per-candidate procedure
 
-1. **Search S2 by title**. Use the host's URL fetch tool:
+1. **Search S2 by title**. Use the bundled helper or the host's URL fetch tool:
    ```
    GET https://api.semanticscholar.org/graph/v1/paper/search
        ?query=<URL-encoded(title)>
        &limit=5
-       &fields=title,abstract,year,authors,venue,externalIds
+       &fields=title,abstract,year,authors,venue,externalIds,openAccessPdf
    ```
    No API key required for the public endpoint. Be polite: 1 QPS.
 
 2. **Take the top hit**. Compare `title` to the candidate `title` via the
-   helper:
-   ```bash
-   python scripts/levenshtein_match.py --candidate "..." --found "..."
-   ```
-   The helper prints an integer 0-100 (the Levenshtein ratio).
-   - **< 70 → discard the candidate.** Move on.
-   - **≥ 70 → continue to checks 3-5.**
+    helper:
+    ```bash
+    python scripts/levenshtein_match.py --candidate "..." --found "..."
+    ```
+    The helper prints `<ratio> PASS` or `<ratio> FAIL` (e.g., `85 PASS`).
+    - **≤ 70 → discard the candidate.** Move on.
+    - **> 70 → continue to checks 3-5.**
 
-3. **Check abstract presence**. If `abstract` is null or empty → discard.
-   The paper requires every cited entity to have a retrievable abstract for
-   downstream context enrichment in the Section Writing Agent.
+3. **Year-alignment bonus**. If the candidate's `discovered_for` query
+    mentioned a specific year and the S2 hit's year matches exactly, record
+    `match_score = ratio + 5`. (This is a soft bonus used for tie-breaking
+    when two candidates dedup to similar entries.)
 
-4. **Check temporal cutoff**:
-   ```bash
-   python scripts/check_cutoff.py \
-       --paper-year <year> \
-       --paper-month <month or omit> \
-       --cutoff <YYYY-MM-DD>
-   ```
-   Exit 0 if strictly predates; exit 1 if not. Discard on exit 1.
+4. **Check abstract presence**. If `abstract` is null or empty → discard.
+    The paper requires every cited entity to have a retrievable abstract for
+    downstream context enrichment in the Section Writing Agent.
 
-5. **Year-alignment bonus**. If the candidate's `discovered_for` query
-   mentioned a specific year and the S2 hit's year matches exactly, record
-   `match_score = ratio + 5`. (This is a soft bonus used for tie-breaking
-   when two candidates dedup to similar entries.)
+5. **Check temporal cutoff**:
+    ```bash
+    python scripts/check_cutoff.py \
+        --paper-year <year> \
+        --paper-month <month or omit> \
+        --cutoff <YYYY-MM-DD>
+    ```
+    Exit 0 if strictly predates; exit 1 if not. Discard on exit 1.
 
 6. **Append to verified pool** if all checks pass. Record:
-   ```json
-   {
-     "paperId": "abc123...",
-     "title": "...",
-     "abstract": "...",
-     "year": 2017,
-     "venue": "NeurIPS",
-     "authors": [{"name": "A. Vaswani"}, ...],
-     "externalIds": {"DOI": "...", "ArXiv": "1706.03762"},
-     "match_score": 100,
-     "discovered_for": ["intro"]
-   }
-   ```
+    ```json
+    {
+      "paperId": "abc123...",
+      "title": "...",
+      "abstract": "...",
+      "year": 2017,
+      "venue": "NeurIPS",
+      "authors": [{"name": "A. Vaswani"}, ...],
+      "externalIds": {"DOI": "...", "ArXiv": "1706.03762"},
+      "openAccessPdf": {"url": "..."},
+      "match_score": 100,
+      "discovered_for": ["intro"]
+    }
+    ```
 
 ### Rate-limit etiquette
 

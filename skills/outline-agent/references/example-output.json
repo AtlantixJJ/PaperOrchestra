@@ -5,7 +5,7 @@
       "figure_id": "fig_teaser_fig_cross_modal_alignment_performance",
       "title": "Teaser: Cross-Modal Alignment Performance",
       "plot_type": "plot",
-      "data_source": "experimental_log.md",
+      "data_source": "experiments/",
       "objective": "Visual summary (Radar Chart) demonstrating that our method achieves SOTA balance across 5 metrics.",
       "aspect_ratio": "16:9"
     }

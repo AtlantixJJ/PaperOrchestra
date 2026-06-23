@@ -19,8 +19,8 @@ acceptance-rate improvement (Fig. 4). Get this step right.
 
 - `workspace/drafts/paper.tex` — output of Step 4
 - `workspace/inputs/conference_guidelines.md`
-- `workspace/inputs/experimental_log.md` — used as ground truth for the
-  hallucination check
+- All `.md` files under `workspace/inputs/experiments/` — used as ground truth for the
+  hallucination check (concatenated in filename-sorted order)
 - `workspace/citation_pool.json` / `workspace/refs.bib` — the allowed
   bibliography
 
@@ -134,7 +134,7 @@ Prepend the Anti-Leakage Prompt. Inputs:
 - `paper.tex` — current draft
 - `paper.pdf` — compiled PDF (multimodal context if available)
 - `conference_guidelines.md`
-- `experimental_log.md` — ground truth for numeric claims
+- all files from `experiments/` — ground truth for numeric claims (concatenated)
 - `worklog.json` — history of previous changes
 - `citation_pool.json` — the allowed bibliography
 - `reviewer_feedback` — the JSON from Step 1
@@ -239,7 +239,7 @@ acceptance scores." The verbatim prompt forbids this. **You must honor it:**
   limitation that..." is forbidden. The model can address weaknesses
   through clearer explanation, but must not game the evaluator by listing
   them defensively.
-- **All numeric claims MUST be verified against `experimental_log.md`.**
+- **All numeric claims MUST be verified against the `experiments/` files.**
   The agent cannot introduce new numbers, only re-present existing ones.
 
 These rules prevent reward hacking and keep the refinement loop honest.

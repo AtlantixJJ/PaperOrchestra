@@ -62,7 +62,7 @@
         },
         "title":     { "type": "string", "minLength": 1 },
         "plot_type": { "enum": ["plot", "diagram"] },
-        "data_source": { "enum": ["idea.md", "experimental_log.md", "both"] },
+        "data_source": { "enum": ["idea.md", "experiments/", "both"] },
         "objective": { "type": "string", "minLength": 1 },
         "aspect_ratio": {
           "enum": ["1:1", "1:4", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]

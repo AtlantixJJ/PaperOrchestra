@@ -1,6 +1,6 @@
 ---
 name: outline-agent
-description: Step 1 of the PaperOrchestra pipeline (arXiv:2604.05018). Convert (idea.md, experimental_log.md, template.tex, conference_guidelines.md) into a strict JSON outline containing a plotting plan, literature search plan (Intro + Related Work), and section-level writing plan with citation hints. TRIGGER when the orchestrator delegates Step 1 or when the user asks to "outline a paper from raw materials" or "generate the paper structure".
+description: Step 1 of the PaperOrchestra pipeline (arXiv:2604.05018). Convert (idea.md, experiments/ folder, template.tex, conference_guidelines.md) into a strict JSON outline containing a plotting plan, literature search plan (Intro + Related Work), and section-level writing plan with citation hints. TRIGGER when the orchestrator delegates Step 1 or when the user asks to "outline a paper from raw materials" or "generate the paper structure".
 ---
 
 # Outline Agent (Step 1)
@@ -12,7 +12,7 @@ Faithful implementation of the Outline Agent from PaperOrchestra
 
 ## Your task
 
-Read four input files from the workspace and produce a single JSON object at
+Read the input files from the workspace and produce a single JSON object at
 `workspace/outline.json` with three top-level keys:
 
 - `plotting_plan` — array of figure objects
@@ -25,12 +25,12 @@ Read four input files from the workspace and produce a single JSON object at
    Outline Agent system prompt from the paper. Use it as your system message.
 2. **Prepend the Anti-Leakage Prompt** from
    `../paper-orchestra/references/anti-leakage-prompt.md`.
-3. **Read the four input files**:
+3. **Read the input files**:
    - `workspace/inputs/idea.md`
-   - `workspace/inputs/experimental_log.md`
+   - All `.md` files under `workspace/inputs/experiments/` — read every file and concatenate them in filename-sorted order to form the combined experimental log.
    - `workspace/inputs/template.tex`
    - `workspace/inputs/conference_guidelines.md`
-4. **Synthesize across all four** — the global instruction in the prompt is
+4. **Synthesize across all inputs** — the global instruction in the prompt is
    "Do not analyze inputs in isolation. You must synthesize information across
    all provided documents for every step."
 5. **Emit a single JSON object** following the schema in
@@ -52,7 +52,7 @@ These are excerpted from `references/prompt.md`. The validator enforces them.
 ### Plotting plan (Directive 1)
 
 - `plot_type` MUST be exactly one of `"plot"` or `"diagram"`.
-- `data_source` MUST be exactly one of `"idea.md"`, `"experimental_log.md"`,
+- `data_source` MUST be exactly one of `"idea.md"`, `"experiments/"`,
   or `"both"`.
 - `aspect_ratio` MUST be exactly one of:
   `"1:1"`, `"1:4"`, `"2:3"`, `"3:2"`, `"3:4"`, `"4:1"`, `"4:3"`, `"4:5"`,
@@ -85,8 +85,8 @@ These are excerpted from `references/prompt.md`. The validator enforces them.
   materials concretely. AVOID "Describe the model". REQUIRE "Formalize the
   Temporal-Aware Attention mechanism using Eq. 3 from idea.md."
 - **Mandatory citations**: every dataset, optimizer, metric, and
-  foundational architecture/model mentioned in `idea.md` or
-  `experimental_log.md` MUST have a citation hint, no matter how ubiquitous
+  foundational architecture/model mentioned in `idea.md` or the
+  `experiments/` files MUST have a citation hint, no matter how ubiquitous
   (e.g., AdamW, ResNet, ImageNet, CLIP, Transformer, LLaMA, GPT, LLaVA).
 - **Citation hint format**:
   - If you know the exact author and title:

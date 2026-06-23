@@ -3,7 +3,7 @@
 format_po_inputs.py — Phase 4 of agent-research-aggregator.
 
 Converts synthesis.json (Phase 3 output) into PaperOrchestra-compatible input
-files: idea.md (Sparse variant) and experimental_log.md.
+files: idea.md (Sparse variant) and experiments/aggregated.md.
 
 Optionally writes an aggregation_report.md audit trail.
 
@@ -126,7 +126,7 @@ def build_idea_md(s: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# experimental_log.md (PaperOrchestra Experimental Log format)
+# experiments/aggregated.md (PaperOrchestra Experimental Log format)
 # ---------------------------------------------------------------------------
 
 def build_experimental_log_md(s: dict) -> str:
@@ -312,7 +312,7 @@ def build_report_md(s: dict, idea_path: Path, log_path: Path,
     lines.append("| File | Status |")
     lines.append("|---|---|")
     lines.append(f"| `workspace/inputs/idea.md` | ✓ generated (review recommended) |")
-    lines.append(f"| `workspace/inputs/experimental_log.md` | ✓ generated (review recommended) |")
+    lines.append(f"| `workspace/inputs/experiments/aggregated.md` | ✓ generated (review recommended) |")
     lines.append(f"| `workspace/inputs/template.tex` | **MISSING — ask user to provide** |")
     lines.append(f"| `workspace/inputs/conference_guidelines.md` | **MISSING — ask user to provide** |")
     lines.append("")
@@ -327,7 +327,7 @@ def build_report_md(s: dict, idea_path: Path, log_path: Path,
 def main():
     parser = argparse.ArgumentParser(description="Format PaperOrchestra inputs from synthesis.json")
     parser.add_argument("--synthesis", required=True, help="Path to synthesis.json")
-    parser.add_argument("--out", required=True, help="Output directory for idea.md + experimental_log.md")
+    parser.add_argument("--out", required=True, help="Output directory for idea.md + experiments/aggregated.md")
     parser.add_argument("--report", default=None, help="Optional path for aggregation_report.md")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print generated files to stdout instead of writing")
@@ -358,14 +358,16 @@ def main():
     if args.dry_run:
         print("=== workspace/inputs/idea.md ===")
         print(idea_content)
-        print("\n=== workspace/inputs/experimental_log.md ===")
+        print("\n=== workspace/inputs/experiments/aggregated.md ===")
         print(log_content)
         return
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
     idea_path = out_dir / "idea.md"
-    log_path = out_dir / "experimental_log.md"
+    experiments_dir = out_dir / "experiments"
+    experiments_dir.mkdir(parents=True, exist_ok=True)
+    log_path = experiments_dir / "aggregated.md"
 
     with idea_path.open("w", encoding="utf-8") as f:
         f.write(idea_content)
@@ -390,11 +392,11 @@ def main():
         print(
             "\n[WARN] No result tables were synthesized. "
             "PaperOrchestra's section-writing agent requires numeric data — "
-            "consider adding result tables to experimental_log.md manually.",
+            "consider adding result tables to experiments/aggregated.md manually.",
             file=sys.stderr,
         )
 
-    print("\nDone. Review idea.md and experimental_log.md with the user before")
+    print("\nDone. Review idea.md and experiments/aggregated.md with the user before")
     print("running paper-orchestra.")
 
 

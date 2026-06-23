@@ -19,7 +19,7 @@ metrics).
 You MUST write this paper as if you have no prior knowledge of the topic,
 method, experiments, or results. Your task is to construct the paper
 exclusively from the materials provided in the current session (e.g.,
-idea.md, experimental_log.md, figures, and other inputs). Treat these inputs
+idea.md, experiments/ (folder of .md files), figures, and other inputs). Treat these inputs
 as the only available source of information.
 
 ### Forbidden Behavior
@@ -43,7 +43,8 @@ any information that could reveal the identity of the authors or institutions.
 
 You may use only:
 
-- The materials explicitly provided in this session.
+- The materials explicitly provided in this session (including all .md files
+  from experiments/ read in filename-sorted order).
 - Logical reasoning derived from those materials.
 
 ### Core Principle

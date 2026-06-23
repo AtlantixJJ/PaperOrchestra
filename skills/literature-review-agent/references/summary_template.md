@@ -19,4 +19,4 @@
 
 ## Limitations
 
-## Relation to LiteAvatar
+## Relation to Our Work

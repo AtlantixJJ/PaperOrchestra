@@ -89,7 +89,7 @@ To benchmark a coding agent's paper-writing skill, run:
    ideally — the paper notes pre-training contamination is an inherent
    risk; use unpublished or recent work to mitigate).
 2. Run paper-writing-bench to extract idea_sparse.md / idea_dense.md /
-   experimental_log.md.
+   experiments/aggregated.md.
 3. Run paper-orchestra on those inputs (with the venue's template and
    guidelines).
 4. Run paper-autoraters to compare the generated paper to the original.

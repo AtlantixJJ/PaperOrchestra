@@ -16,7 +16,7 @@ PaperBanana is best for:
 | Use case | Recommendation |
 |---|---|
 | Complex architectural / framework overview diagrams (`plot_type == "diagram"`) | **PaperBanana** (Retriever grounds style in real paper examples) |
-| Plots backed by numeric data in `experimental_log.md` | Either; matplotlib gives more deterministic axis values |
+| Plots backed by numeric data in `experiments/` | Either; matplotlib gives more deterministic axis values |
 | Hosts with no vision capability | Matplotlib (PaperBanana's Critic loop needs a VLM) |
 | Batch / non-interactive runs | Either; PaperBanana adds API cost per figure |
 
@@ -85,7 +85,7 @@ python skills/plotting-agent/scripts/paperbanana_render.py \
 python skills/plotting-agent/scripts/paperbanana_render.py \
     --figure-id   fig_main_results \
     --caption     "Figure 3: Comparison of our method against baselines." \
-    --content-file workspace/inputs/experimental_log.md \
+    --content-file workspace/inputs/experiments/ \
     --task        plot \
     --aspect-ratio 5:4 \
     --max-critic-rounds 2 \
@@ -106,7 +106,7 @@ The wrapper converts the plotting-agent's figure spec to PaperBanana's input dic
 | plotting-agent field | PaperBanana field | Notes |
 |---|---|---|
 | `objective` | `caption` + `visual_intent` | Used as generation prompt |
-| `idea.md` or `experimental_log.md` | `content` | Method/data context |
+| `idea.md` or `experiments/` | `content` | Method/data context (all .md files concatenated filename-sorted) |
 | `aspect_ratio` | `additional_info.rounded_ratio` | Same string format |
 | `plot_type` | `task_name` | `diagram` or `plot` |
 

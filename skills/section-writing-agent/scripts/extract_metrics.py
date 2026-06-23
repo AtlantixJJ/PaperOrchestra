@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-extract_metrics.py — Parse markdown tables out of experimental_log.md's
-"## 2. Raw Numeric Data" section into structured JSON.
+extract_metrics.py — Parse markdown tables out of the experiments/ folder's
+"## 2. Raw Numeric Data" section(s) into structured JSON.
 
 The Section Writing Agent uses this to construct LaTeX booktabs tables
 without re-deriving numeric values from raw markdown text. Per the App. F.1
 prompt, "do not hallucinate numbers; use the exact values provided in the
 log" — this script makes that mechanical.
+
+Input: either --log-dir <dir> (reads all .md files in the directory,
+filename-sorted, and concatenates them) or --log <file> (single file,
+kept for backward compatibility).
 
 Output JSON shape:
     {
@@ -24,12 +28,14 @@ Output JSON shape:
     }
 
 Usage:
-    python extract_metrics.py --log experimental_log.md --out metrics.json
+    python extract_metrics.py --log-dir workspace/inputs/experiments/ --out metrics.json
+    python extract_metrics.py --log experimental_log.md --out metrics.json  # legacy
 """
 import argparse
 import json
 import re
 import sys
+from pathlib import Path
 
 
 def find_raw_data_section(text: str) -> str:
@@ -90,13 +96,48 @@ def parse_markdown_tables(section: str) -> list[dict]:
     return tables
 
 
+def read_experiments_dir(dir_path: str) -> str:
+    """Read all .md files in dir_path (filename-sorted) and concatenate."""
+    d = Path(dir_path)
+    if not d.is_dir():
+        print(f"ERROR: --log-dir {dir_path!r} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+    md_files = sorted(d.glob("*.md"))
+    if not md_files:
+        print(f"WARN: no .md files found in {dir_path}", file=sys.stderr)
+        return ""
+    parts = []
+    for f in md_files:
+        parts.append(f.read_text(encoding="utf-8"))
+    return "\n\n".join(parts)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--log", required=True, help="experimental_log.md path")
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--log-dir",
+        help="Directory containing experiment .md files (read all, filename-sorted). "
+             "Use this for the experiments/ folder layout.",
+    )
+    group.add_argument(
+        "--log",
+        help="Single experimental log .md file path (legacy / back-compat alias for --log-dir).",
+    )
     p.add_argument("--out", required=True, help="metrics.json output path")
     args = p.parse_args()
 
-    text = open(args.log).read()
+    if args.log_dir is not None:
+        text = read_experiments_dir(args.log_dir)
+    else:
+        # --log: backward-compatible single-file mode
+        log_path = Path(args.log)
+        if log_path.is_dir():
+            # Caller passed a directory to --log; redirect gracefully
+            text = read_experiments_dir(args.log)
+        else:
+            text = log_path.read_text(encoding="utf-8")
+
     section = find_raw_data_section(text)
     if not section:
         print("WARN: no '## 2. Raw Numeric Data' section found", file=sys.stderr)

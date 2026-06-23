@@ -16,7 +16,7 @@ The simulated reviewer will sometimes ask:
 The Refinement Agent must **not** fabricate answers to these. The paper:
 
 > If the reviewer asks for new experiments, ablations, or baselines that
-> are NOT in experimental_log.md, simply ignore those specific requests.
+> are NOT in experiments/, simply ignore those specific requests.
 > Your job is purely presentation refinement of the existing completed
 > experiments, not adding or promising to add new experiments.
 
@@ -24,12 +24,12 @@ The Refinement Agent must **not** fabricate answers to these. The paper:
 
 There is no fully deterministic way to grep for "fabricated experiments" —
 it requires reading the new content and cross-checking against
-`experimental_log.md`. The pragmatic check:
+`experiments/`. The pragmatic check:
 
 1. Run the orphan-citation gate from `section-writing-agent/scripts/orphan_cite_gate.py`.
    New numeric claims often come bundled with new (orphan) citations.
 2. Run a numeric-claim grep: extract every `\d+\.\d+%?` from the new draft,
-   intersect with `\d+\.\d+%?` in `experimental_log.md`. New numbers in the
+   intersect with `\d+\.\d+%?` across all `.md` files in `experiments/`. New numbers in the
    draft that aren't in the log are suspicious. (False positives possible
    for parameter counts and dates; review manually.)
 
@@ -74,11 +74,11 @@ proposed approach is most effective when...". Reframing, not listing.
 ## Rule 3 — Numeric ground truth
 
 > All numerical claims (accuracy, parameter count, training hours,
-> latency) MUST be verified against experimental_log.md.
+> latency) MUST be verified against experiments/.
 
 The grep heuristic above catches this partially. The host agent should
 also instruct the refinement step explicitly: "any numeric value you cite
-in your revision must already exist in experimental_log.md or
+in your revision must already exist in experiments/ or
 metrics.json."
 
 ## Rule 4 — Citation integrity

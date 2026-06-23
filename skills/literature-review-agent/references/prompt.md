@@ -22,7 +22,8 @@ Inputs:
   - intro_related_work_plan: This is your PRIMARY guide for structure and
     arguments.
   - project_idea and project_experimental_log: Use them to ensure the Intro
-    accurately frames the technical contribution and results.
+    accurately frames the technical contribution and results. The experimental
+    log is the concatenated content of all .md files in experiments/ (filename-sorted).
   - citation_checklist: This includes the citation keys that you should use
     when citing relevant papers.
   - collected_papers: These are all the relevant papers we collect for you for
@@ -75,3 +76,5 @@ code with ```latex content ```.
 The other placeholders (`intro_related_work_plan`, `project_idea`,
 `project_experimental_log`, `citation_checklist`, `collected_papers`) are
 substituted by passing their full file/JSON contents into the user message.
+`project_experimental_log` is built by reading all `.md` files in
+`workspace/inputs/experiments/` in filename-sorted order and concatenating them.

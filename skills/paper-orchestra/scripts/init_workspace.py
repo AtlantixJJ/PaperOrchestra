@@ -16,6 +16,7 @@ import textwrap
 WORKSPACE_DIRS = [
     "inputs",
     "inputs/figures",
+    "inputs/experiments",   # Experimental log files (.md); read all filename-sorted
     "figures",
     "drafts",
     "refinement",
@@ -32,7 +33,10 @@ INPUTS_README = textwrap.dedent("""\
     ## Required
 
     - `idea.md`                  — Idea Summary (Sparse or Dense; see io-contract.md)
-    - `experimental_log.md`      — Setup, raw numeric data, qualitative observations
+    - `experiments/`             — Folder of .md files: setup, raw numeric data,
+                                   qualitative observations. The pipeline reads all
+                                   .md files filename-sorted and concatenates them.
+                                   Place at least one .md file here (e.g. aggregated.md).
     - `template.tex`             — LaTeX template for the target conference
     - `conference_guidelines.md` — Page limit, mandatory sections, formatting rules
 
@@ -68,8 +72,9 @@ def main() -> int:
             f.write(INPUTS_README)
 
     print(f"Workspace scaffolded at: {out}")
-    print("Next: drop your idea.md, experimental_log.md, template.tex, and")
-    print("conference_guidelines.md into the inputs/ subdirectory, then run:")
+    print("Next: drop your idea.md, template.tex, and conference_guidelines.md")
+    print("into inputs/, and place your experiment .md file(s) in inputs/experiments/,")
+    print("then run:")
     print(f"  python {os.path.dirname(__file__)}/validate_inputs.py --workspace {out}")
     return 0
 

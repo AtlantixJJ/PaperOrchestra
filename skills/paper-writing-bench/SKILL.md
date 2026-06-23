@@ -23,8 +23,9 @@ Given an existing AI research paper (PDF or markdown extract), produce:
   experimental results
 - `idea.md` (Dense variant) — detailed technical proposal with LaTeX
   equations and variable definitions, but still no experimental results
-- `experimental_log.md` — exhaustive raw experimental setup, numeric data,
-  and qualitative observations, with all narrative references stripped
+- `experiments/aggregated.md` — exhaustive raw experimental setup, numeric data,
+  and qualitative observations, with all narrative references stripped; written
+  into the `experiments/` folder so it can be combined with other experiment files
 
 These three files form a complete (I, E) input pair for the
 paper-orchestra pipeline. You can then run the pipeline and compare its
@@ -42,7 +43,7 @@ output to the original paper using `paper-autoraters`.
 
 - `bench/<paper_id>/idea_sparse.md` — Sparse variant
 - `bench/<paper_id>/idea_dense.md` — Dense variant
-- `bench/<paper_id>/experimental_log.md` — Experimental log
+- `bench/<paper_id>/experiments/aggregated.md` — Experimental log
 
 ## Workflow
 
@@ -86,7 +87,7 @@ instructs the model to:
 - Log figure findings as factual observations
 - Anonymize authors
 
-Output: `experimental_log.md` with sections for Setup, Raw Numeric Data,
+Output: `experiments/aggregated.md` with sections for Setup, Raw Numeric Data,
 and Qualitative Observations.
 
 ## Critical rules from the prompts
@@ -112,15 +113,15 @@ These are excerpted from App. F.2. The host agent MUST honor them:
 
 ## How the bench is used
 
-After producing `(idea_sparse.md, idea_dense.md, experimental_log.md)` for
+After producing `(idea_sparse.md, idea_dense.md, experiments/aggregated.md)` for
 a paper:
 
 1. Pick a variant (Sparse or Dense) — the paper ablates both, with Dense
    producing more rigorous methodology and Sparse exercising the system's
    robustness on under-specified inputs.
-2. Drop the chosen `idea.md`, plus `experimental_log.md`, plus a
-   `template.tex` for the target conference, plus a
-   `conference_guidelines.md`, into a paper-orchestra workspace.
+2. Drop the chosen `idea.md`, the `experiments/` folder containing `aggregated.md`,
+   a `template.tex` for the target conference, and a
+   `conference_guidelines.md` into a paper-orchestra workspace.
 3. Run the pipeline.
 4. Compare the generated paper against the original using
    `paper-autoraters` (citation F1, lit review quality, SxS paper quality).

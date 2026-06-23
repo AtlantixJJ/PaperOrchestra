@@ -1,6 +1,6 @@
 # LaTeX Table Patterns
 
-Conventions for building LaTeX tables from `experimental_log.md` raw numeric
+Conventions for building LaTeX tables from `experiments/` raw numeric
 data, per the Section Writing Agent prompt requirements (App. F.1 p.47, item
 2 "Data & Tables").
 
@@ -34,9 +34,9 @@ Baseline    & 78.2     & 0.79 & 12.3 \\
 \end{table}
 ```
 
-## From experimental_log markdown table → LaTeX
+## From experiments/ markdown table → LaTeX
 
-`experimental_log.md` contains tables in plain markdown:
+Files in `experiments/` contain tables in plain markdown:
 
 ```markdown
 ## 2. Raw Numeric Data

@@ -41,7 +41,7 @@ Usage:
     python paperbanana_render.py \\
         --figure-id fig_results \\
         --caption "Figure 2: Comparison of baselines." \\
-        --content-file workspace/inputs/experimental_log.md \\
+        --content-file workspace/inputs/experiments/ \\
         --task plot \\
         --aspect-ratio "5:4" \\
         --max-critic-rounds 1 \\
@@ -250,7 +250,9 @@ def main() -> int:
     )
     p.add_argument(
         "--content-file", type=Path, required=False,
-        help="Path to idea.md or experimental_log.md — used as method context",
+        default=Path("workspace/inputs/experiments/"),
+        help="Path to idea.md or the experiments/ folder (default: workspace/inputs/experiments/). "
+             "When a directory is given, all .md files are read filename-sorted and concatenated.",
     )
     p.add_argument(
         "--task", choices=["diagram", "plot"], default="diagram",
@@ -281,7 +283,7 @@ def main() -> int:
 
     if args.content_file is None or not args.content_file.exists():
         p.error(
-            f"--content-file is required and must exist. "
+            f"--content-file must point to an existing file or directory. "
             f"Got: {args.content_file}"
         )
 
@@ -303,7 +305,13 @@ def main() -> int:
         )
         sys.exit(2)   # caller uses exit code 2 to trigger fallback
 
-    content = args.content_file.read_text(encoding="utf-8")
+    if args.content_file.is_dir():
+        md_files = sorted(args.content_file.glob("*.md"))
+        if not md_files:
+            p.error(f"--content-file directory {args.content_file} contains no .md files")
+        content = "\n\n".join(f.read_text(encoding="utf-8") for f in md_files)
+    else:
+        content = args.content_file.read_text(encoding="utf-8")
     figure_id = args.figure_id or args.out.stem
 
     input_data = {

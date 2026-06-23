@@ -11,7 +11,8 @@ specifications below.
 
 Implementation: `scripts/levenshtein_match.py` uses
 `Levenshtein.ratio(a, b) * 100` from the `python-Levenshtein` package and
-returns the integer ratio. Threshold: **strictly greater than 70**.
+returns the integer ratio. Threshold: **strictly greater than 70** (ratio = 70
+is a FAIL).
 
 Examples:
 

@@ -24,7 +24,7 @@ by `scripts/validate_outline.py`. This document is the human-readable view.
   "figure_id":     "fig_framework_overview",            // snake_case, no "Figure"
   "title":         "Framework Overview",
   "plot_type":     "diagram",                           // "plot" or "diagram"
-  "data_source":   "idea.md",                           // "idea.md" | "experimental_log.md" | "both"
+  "data_source":   "idea.md",                           // "idea.md" | "experiments/" | "both"
   "objective":     "Visual summary (Block Diagram) of the proposed pipeline.",
   "aspect_ratio":  "16:9"                               // see allowed-values.md
 }

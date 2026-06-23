@@ -6,7 +6,7 @@ Reference for the orchestrator. Source: arXiv:2604.05018, §4 and Fig. 1.
 
 ```
                   ┌──────────────────────────────────────────────────┐
-                  │  Inputs: I (idea.md), E (experimental_log.md),    │
+                  │  Inputs: I (idea.md), E (experiments/*.md),       │
                   │          T (template.tex), G (guidelines.md),     │
                   │          F (figures/, optional)                   │
                   └────────────────────┬─────────────────────────────┘
@@ -42,7 +42,7 @@ Reference for the orchestrator. Source: arXiv:2604.05018, §4 and Fig. 1.
                   ┌──────────────────────────────────────────────────┐
                   │  Step 4: Section Writing Agent      (1 LLM call) │
                   │  ONE single multimodal call:                      │
-                  │  - extracts numeric values from E                 │
+                  │  - extracts numeric values from E (experiments/)  │
                   │  - builds booktabs LaTeX tables                   │
                   │  - drafts Abstract / Methodology / Experiments /  │
                   │    Conclusion (preserves Intro + Related Work)    │

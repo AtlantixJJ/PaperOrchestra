@@ -9,7 +9,9 @@ every input and intermediate artifact.
 workspace/
 ├── inputs/                              # User-provided
 │   ├── idea.md                          # I — Sparse or Dense idea (markdown)
-│   ├── experimental_log.md              # E — setup, raw numeric data, observations
+│   ├── experiments/                     # E — setup, raw numeric data, observations
+│   │   ├── aggregated.md                #     (one or more .md files; read all filename-sorted)
+│   │   └── *.md                         #     additional experiment files as needed
 │   ├── template.tex                     # T — conference LaTeX template
 │   ├── conference_guidelines.md         # G — formatting rules, page limit, sections
 │   └── figures/                         # F — optional pre-existing figures (PNG/PDF)
@@ -70,9 +72,13 @@ The Outline Agent automatically handles both. Dense produces more rigorous
 methodology sections; Sparse exercises the system's robustness (per the
 paper's ablation, App. E).
 
-### `experimental_log.md` — Experimental Log (E)
+### `experiments/` — Experimental Log (E)
 
-Markdown. Strict structure required:
+A folder of one or more Markdown files. The pipeline reads all `.md` files
+in this folder in filename-sorted order and concatenates them before passing
+to downstream agents. Each file should follow the strict structure below (or
+a subset of it); `aggregated.md` is the conventional name for the primary
+file written by `format_po_inputs.py`.
 
 ```markdown
 # Experimental Log
@@ -100,6 +106,8 @@ references to "Table N" or "Figure N".)
 - Self-contained: no citations, no URLs, no author names
 - Numeric values must be 100% accurate — they become the ground truth for
   the Refinement Agent's hallucination check
+- Each `.md` file in `experiments/` must be independently self-contained
+  (i.e., does not assume reading order relative to other files)
 
 ### `template.tex` — LaTeX Template (T)
 
@@ -198,7 +206,7 @@ citation, with full Semantic Scholar metadata. Schema:
   "created_at": "2026-04-09T12:34:56Z",
   "inputs": {
     "idea.md":               {"sha256": "...", "bytes": 1234},
-    "experimental_log.md":   {"sha256": "...", "bytes": 5678},
+    "experiments/":          {"files": ["aggregated.md"], "sha256_concat": "..."},
     "template.tex":          {"sha256": "...", "bytes": 9012},
     "conference_guidelines.md": {"sha256": "...", "bytes": 345}
   },

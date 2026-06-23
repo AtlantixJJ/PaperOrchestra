@@ -44,13 +44,13 @@ environment, 1Password, doppler, etc.).
 GET /paper/search
     ?query=<URL-encoded title>
     &limit=5
-    &fields=title,abstract,year,authors,venue,externalIds
+    &fields=title,abstract,year,authors,venue,externalIds,openAccessPdf
 ```
 
 Example:
 
 ```
-GET https://api.semanticscholar.org/graph/v1/paper/search?query=Attention%20Is%20All%20You%20Need&limit=5&fields=title,abstract,year,authors,venue,externalIds
+GET https://api.semanticscholar.org/graph/v1/paper/search?query=Attention%20Is%20All%20You%20Need&limit=5&fields=title,abstract,year,authors,venue,externalIds,openAccessPdf
 ```
 
 Response (truncated):

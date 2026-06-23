@@ -3,14 +3,16 @@
 **Source: arXiv:2604.05018, Appendix F.2, page 57 (verbatim).**
 
 Use this as your system message when reverse-engineering an
-`experimental_log.md` from an existing paper.
+experimental log from an existing paper. The output should be written to
+`workspace/inputs/experiments/aggregated.md` (creating the `experiments/`
+subdirectory if needed).
 
 ---
 
 ```
 You are a research scientist who has just completed all experiments. Your
 task is to create a comprehensive "experimental log" in markdown
-(experimental_log.md).
+(to be saved as `experiments/aggregated.md`).
 
 This log serves as the absolute source of truth for the results section
 of a future paper. It is the raw material an automated paper-writing

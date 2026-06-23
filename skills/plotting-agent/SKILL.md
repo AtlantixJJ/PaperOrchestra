@@ -1,6 +1,6 @@
 ---
 name: plotting-agent
-description: Step 2 of the PaperOrchestra pipeline (arXiv:2604.05018). Execute the visualization plan from outline.json — render plots and conceptual diagrams from experimental_log.md and idea.md, optionally refine via VLM critique loop, and produce context-aware captions. Runs in parallel with the literature-review-agent. TRIGGER when the orchestrator delegates Step 2 or when the user asks to "generate the figures for my paper" or "render the plots from this experiment log".
+description: Step 2 of the PaperOrchestra pipeline (arXiv:2604.05018). Execute the visualization plan from outline.json — render plots and conceptual diagrams from the experiments/ folder and idea.md, optionally refine via VLM critique loop, and produce context-aware captions. Runs in parallel with the literature-review-agent. TRIGGER when the orchestrator delegates Step 2 or when the user asks to "generate the figures for my paper" or "render the plots from this experiment log".
 ---
 
 # Plotting Agent (Step 2)
@@ -18,8 +18,8 @@ finally caption.
 ## Inputs
 
 - `workspace/outline.json` — specifically the `plotting_plan` array
-- `workspace/inputs/idea.md` and `workspace/inputs/experimental_log.md` —
-  the source data
+- `workspace/inputs/idea.md` and all `.md` files under `workspace/inputs/experiments/` —
+  the source data (read every file in `experiments/` and concatenate in filename-sorted order)
 - `workspace/inputs/figures/` — optional pre-existing figures (`PlotOn` mode)
 
 ## Outputs
@@ -38,7 +38,7 @@ finally caption.
      "figure_id": "fig_main_results",
      "title": "Main Results on Dataset X",
      "plot_type": "plot",
-     "data_source": "experimental_log.md",
+     "data_source": "experiments/",
      "objective": "Visual summary (Grouped Bar Chart) demonstrating ...",
      "aspect_ratio": "5:4"
    }
@@ -48,10 +48,10 @@ finally caption.
    `references/chart-patterns.md` (for `plot_type=="plot"`) or
    `references/diagram-patterns.md` (for `plot_type=="diagram"`).
 
-3. **Extract data**: parse `idea.md` and/or `experimental_log.md`
+3. **Extract data**: parse `idea.md` and/or the files in `experiments/`
    (`data_source` field tells you which) to obtain the numeric values or
-   conceptual entities the figure needs. For `experimental_log.md`, the
-   `## 2. Raw Numeric Data` section contains markdown tables.
+   conceptual entities the figure needs. For `experiments/` files, each file
+   may contain a `## 2. Raw Numeric Data` section with markdown tables.
 
 4. **Render**:
 
@@ -143,8 +143,8 @@ overview diagrams, write matplotlib patches code yourself.
   referenced from the outline.
 - **No `Figure N:` prefix** in captions — LaTeX adds it.
 - **Never describe data you didn't plot.** The Plotting Agent must not
-  hallucinate axes, baselines, or trends. Source-of-truth is
-  `experimental_log.md` or `idea.md`.
+  hallucinate axes, baselines, or trends. Source-of-truth is the
+  files in `experiments/` or `idea.md`.
 
 ## Pre-existing figures (PlotOn mode)
 

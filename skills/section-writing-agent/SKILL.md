@@ -1,6 +1,6 @@
 ---
 name: section-writing-agent
-description: Step 4 of the PaperOrchestra pipeline (arXiv:2604.05018). ONE single multimodal LLM call that drafts the remaining paper sections (Abstract, Methodology, Experiments, Conclusion), extracts numeric values from experimental_log.md into LaTeX booktabs tables, splices the generated figures from Step 2, and merges everything into the template that already contains Intro + Related Work from Step 3. TRIGGER when the orchestrator delegates Step 4 or when the user asks to "write the methodology and experiments sections" or "fill in the rest of the paper".
+description: Step 4 of the PaperOrchestra pipeline (arXiv:2604.05018). ONE single multimodal LLM call that drafts the remaining paper sections (Abstract, Methodology, Experiments, Conclusion), extracts numeric values from the experiments/ folder into LaTeX booktabs tables, splices the generated figures from Step 2, and merges everything into the template that already contains Intro + Related Work from Step 3. TRIGGER when the orchestrator delegates Step 4 or when the user asks to "write the methodology and experiments sections" or "fill in the rest of the paper".
 ---
 
 # Section Writing Agent (Step 4)
@@ -18,7 +18,7 @@ global coherence across sections.
 
 - `workspace/outline.json` — the master plan
 - `workspace/inputs/idea.md` — technical details
-- `workspace/inputs/experimental_log.md` — raw data for tables and qualitative analysis
+- All `.md` files under `workspace/inputs/experiments/` — raw data for tables and qualitative analysis (read every file and concatenate in filename-sorted order)
 - `workspace/drafts/intro_relwork.tex` — the template **with Intro + Related
   Work already filled in by Step 3**. This is your starting point. The
   preamble, package list, style, and the two pre-filled sections must be
@@ -58,17 +58,18 @@ these rules to every LaTeX choice in the generated paper:
 If `tex_profile.json` does not exist (old workspace), default to the safe
 fallback column (no cleveref, no nicefrac, no microtype, no T1 fontenc).
 
-### 1. Pre-extract metrics from the experimental log
+### 1. Pre-extract metrics from the experiments folder
 
-Run the deterministic helper:
+Run the deterministic helper against each file in the folder, then merge:
 
 ```bash
 python skills/section-writing-agent/scripts/extract_metrics.py \
-    --log workspace/inputs/experimental_log.md \
+    --log-dir workspace/inputs/experiments/ \
     --out workspace/metrics.json
 ```
 
-This parses the `## 2. Raw Numeric Data` section's markdown tables into
+This reads all `.md` files in `experiments/` (filename-sorted), parses every
+`## 2. Raw Numeric Data` section's markdown tables, and merges them into
 structured JSON. The Section Writing Agent uses this to construct LaTeX
 booktabs tables without re-deriving values from raw text. Read
 `references/latex-table-patterns.md` for the booktabs conventions.
@@ -83,7 +84,7 @@ The user message contains:
 
 - `outline.json` — full content
 - `idea.md` — full content
-- `experimental_log.md` — full content (tables AND prose)
+- all files from `experiments/` — concatenated content (tables AND prose, filename-sorted)
 - `intro_relwork.tex` — full content (this becomes `template.tex` for the prompt)
 - `citation_pool.json` — full content (becomes `citation_map.json`)
 - `conference_guidelines.md` — full content
@@ -142,8 +143,8 @@ host agent MUST honor them on the writing call:
 ### Data and tables
 
 - Build LaTeX tables for the experimental results.
-- Extract numeric values directly from `experimental_log.md`. **Do not
-  hallucinate numbers** — use the exact values in the log.
+- Extract numeric values directly from the `experiments/` files. **Do not
+  hallucinate numbers** — use the exact values from the experiment files.
 - Use the `booktabs` package format: `\toprule`, `\midrule`, `\bottomrule`.
 - All tables must appear before the Conclusion section, unless they are
   explicitly placed in an Appendix.
@@ -164,7 +165,7 @@ host agent MUST honor them on the writing call:
 - Write the missing sections following `outline.json`'s `section_plan`
   structure exactly. Hierarchy rule: if 4.1 exists, 4.2 must exist.
 - Use formal mathematical equations, notations, and definitions where
-  appropriate AND directly supported by `idea.md` or `experimental_log.md`.
+  appropriate AND directly supported by `idea.md` or the `experiments/` files.
   **Do not hallucinate math.** Do not use complex math just for the sake
   of it.
 - Always provide detailed ablation studies and qualitative analysis of the
@@ -226,6 +227,6 @@ host agent MUST honor them on the writing call:
 - `references/prompt.md` — verbatim Section Writing Agent prompt from App. F.1
 - `references/latex-table-patterns.md` — booktabs rules + table-from-log examples
 - `references/figure-integration.md` — `\includegraphics`, 2-column handling, placement
-- `scripts/extract_metrics.py` — markdown tables in experimental_log → JSON
+- `scripts/extract_metrics.py` — markdown tables in `experiments/` files → JSON (use `--log-dir`)
 - `scripts/latex_sanity.py` — unmatched braces, env mismatches, specials
 - `scripts/orphan_cite_gate.py` — every `\cite{KEY}` exists in refs.bib

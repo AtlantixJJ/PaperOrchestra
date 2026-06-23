@@ -27,7 +27,7 @@ The workspace MUST contain:
 | File | Symbol | Required | Description |
 |---|---|---|---|
 | `workspace/inputs/idea.md` | `I` | yes | Idea Summary (Sparse or Dense variant — see `references/io-contract.md`) |
-| `workspace/inputs/experimental_log.md` | `E` | yes | Experimental Log: setup, raw numeric data, qualitative observations |
+| `workspace/inputs/experiments/` | `E` | yes | Experiment results folder: one `.md` file per experiment (setup, raw numeric data, qualitative observations). All files are read and merged at pipeline start. |
 | `workspace/inputs/template.tex` | `T` | yes | LaTeX template for the target conference (with `\section{...}` commands) |
 | `workspace/inputs/conference_guidelines.md` | `G` | yes | Formatting rules, page limit, mandatory sections |
 | `workspace/inputs/figures/` | `F` | no | Optional pre-existing figures. If empty, the plotting agent generates everything. |
@@ -74,9 +74,9 @@ python skills/paper-orchestra/scripts/validate_inputs.py --workspace workspace/
 
 | Inputs state | Action |
 |---|---|
-| `idea.md` and `experimental_log.md` both present and non-empty | Continue to Step 1. |
+| `idea.md` present and `experiments/` folder exists and is non-empty | Continue to Step 1. |
 | Either is missing/empty, and the user mentioned a directory | Load and run `agent-research-aggregator` with that directory as `--search-roots`, then re-validate. |
-| Either is missing/empty, no directory mentioned | Ask the user: "Your workspace is missing `idea.md` / `experimental_log.md`. Do you have a folder with research notes or agent history I can aggregate from? If so, tell me the path — or drop the files manually into `workspace/inputs/`." |
+| Either is missing/empty, no directory mentioned | Ask the user: "Your workspace is missing `idea.md` and/or `experiments/` files. Do you have a folder with research notes or agent history I can aggregate from? If so, tell me the path — or drop files manually into `workspace/inputs/experiments/`." |
 
 If validation still fails after aggregation (e.g. `template.tex` or `conference_guidelines.md` are missing), stop and tell the user exactly which files remain outstanding.
 
@@ -126,7 +126,7 @@ single call** in the paper (App. B: "Section Writing Agent (1 call)") — do
 *not* split it per section. The agent receives:
 
 - `outline.json`
-- `idea.md`, `experimental_log.md`
+- `idea.md`, all files from `experiments/` (merged)
 - `intro_relwork.tex` (already-filled from Step 3 — preserve verbatim)
 - `refs.bib` (the citation map)
 - `conference_guidelines.md`
@@ -187,7 +187,7 @@ See `references/io-contract.md`. Summary:
 workspace/
 ├── inputs/                          # user-provided
 │   ├── idea.md
-│   ├── experimental_log.md
+│   ├── experiments/                     # one .md file per experiment result
 │   ├── template.tex
 │   ├── conference_guidelines.md
 │   └── figures/                     # optional pre-existing figures

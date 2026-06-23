@@ -21,7 +21,7 @@ import sys
 
 REQUIRED_INPUTS = [
     "idea.md",
-    "experimental_log.md",
+    "experiments/",
     "template.tex",
     "conference_guidelines.md",
 ]
@@ -47,21 +47,36 @@ def check_idea_md(path: str) -> list[str]:
     return []
 
 
-def check_experimental_log(path: str) -> list[str]:
-    errors = check_file_exists(path)
-    if errors:
-        return errors
-    text = open(path).read()
+def check_experiments_dir(path: str) -> list[str]:
+    """Validate that experiments/ exists, is non-empty, and at least one file has required headings."""
+    if not os.path.isdir(path):
+        return [f"MISSING: {path} (experiments/ directory not found — create it and add at least one .md file)"]
+    md_files = sorted(f for f in os.listdir(path) if f.endswith(".md"))
+    if not md_files:
+        return [f"EMPTY: {path} contains no .md files"]
+
+    # Concatenate all files (filename-sorted) for structural checks
+    parts = []
+    for fname in md_files:
+        fpath = os.path.join(path, fname)
+        if os.path.getsize(fpath) > 0:
+            with open(fpath, encoding="utf-8") as f:
+                parts.append(f.read())
+    text = "\n\n".join(parts)
+
+    problems = []
     if not re.search(r"^##\s+1\.?\s*Experimental Setup", text, re.M):
-        return ["WARN: experimental_log.md missing '## 1. Experimental Setup' heading"]
+        problems.append("WARN: experiments/ missing '## 1. Experimental Setup' heading across all files")
     if not re.search(r"^##\s+2\.?\s*Raw Numeric Data", text, re.M):
-        return ["WARN: experimental_log.md missing '## 2. Raw Numeric Data' heading"]
-    # Anti-leakage check on log itself: should not reference Figure N or Table N
+        problems.append("WARN: experiments/ missing '## 2. Raw Numeric Data' heading across all files")
+    # Anti-leakage check: should not reference Figure N or Table N
     leaks = re.findall(r"(?:see|in|from)\s+(?:Figure|Fig\.|Table|Tab\.)\s*\d+", text, re.I)
     if leaks:
-        return [f"ERROR: experimental_log.md contains figure/table references "
-                f"({leaks[:3]}...). Per App. F.2 the log must be self-contained."]
-    return []
+        problems.append(
+            f"ERROR: experiments/ contains figure/table references "
+            f"({leaks[:3]}...). Per App. F.2 the log must be self-contained."
+        )
+    return problems
 
 
 def check_template(path: str) -> list[str]:
@@ -105,16 +120,20 @@ def main() -> int:
         return 1
 
     all_problems: list[str] = []
-    checks = {
+    file_checks = {
         "idea.md":                  check_idea_md,
-        "experimental_log.md":      check_experimental_log,
         "template.tex":             check_template,
         "conference_guidelines.md": check_guidelines,
     }
-    for fname, fn in checks.items():
+    for fname, fn in file_checks.items():
         problems = fn(os.path.join(inputs, fname))
         for p_ in problems:
             all_problems.append(p_)
+
+    # experiments/ is a directory, not a file — use dedicated checker
+    problems = check_experiments_dir(os.path.join(inputs, "experiments"))
+    for p_ in problems:
+        all_problems.append(p_)
 
     figs = os.path.join(inputs, "figures")
     if os.path.isdir(figs):
@@ -124,7 +143,7 @@ def main() -> int:
         print("INFO: no inputs/figures/ — plotting agent will generate everything")
 
     if not all_problems:
-        print("OK: all 4 required inputs present and well-formed.")
+        print("OK: all required inputs present and well-formed.")
         return 0
 
     fatal = [p for p in all_problems if p.startswith("ERROR") or p.startswith("MISSING") or p.startswith("EMPTY")]
