@@ -72,7 +72,31 @@ def main() -> int:
         else:
             by_key[key] = c
 
-    deduped = list(by_key.values())
+    deduped_pass1 = list(by_key.values())
+    
+    # Pass 2: deduplicate by normalized title to catch dummy paperId collisions
+    by_title: dict[str, dict] = {}
+    for c in deduped_pass1:
+        t_key = norm_title(c.get("title", ""))
+        if not t_key:
+            continue
+        if t_key in by_title:
+            existing = by_title[t_key]
+            # Keep the one with a longer paperId (real S2 hash is 40 chars, dummy is usually short)
+            id_new = str(c.get("paperId", ""))
+            id_old = str(existing.get("paperId", ""))
+            if len(id_new) > len(id_old):
+                merged = existing.get("discovered_for", []) + c.get("discovered_for", [])
+                c["discovered_for"] = list(dict.fromkeys(merged))
+                by_title[t_key] = c
+            else:
+                merged = existing.get("discovered_for", []) + c.get("discovered_for", [])
+                existing["discovered_for"] = list(dict.fromkeys(merged))
+            collisions.append((t_key, c.get("title", "")))
+        else:
+            by_title[t_key] = c
+
+    deduped = list(by_title.values())
     n = len(deduped)
     min_cite = math.floor(0.9 * n)
 
