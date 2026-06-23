@@ -245,6 +245,7 @@ def run_subagent(command: str, prompt: str, timeout: int, cwd: Path, log_name: s
             cwd=str(cwd),
             text=True,
             bufsize=1,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
