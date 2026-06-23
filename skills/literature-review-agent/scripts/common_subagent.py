@@ -237,8 +237,7 @@ def run_subagent(command: str, prompt: str, timeout: int, cwd: Path, log_name: s
         
     meta_content = f"backend={backend}\ncwd={cwd}\nlog={log_path}\nprompt_file={prompt_path}\ncmd={shlex.join(cmd)}\n"
     meta_path.write_text(meta_content, encoding="utf-8")
-    
-    print(f"Executing subagent: {shlex.join(cmd)}")
+    print(f"Executing subagent for {log_name}...")
     with open(log_path, "w", encoding="utf-8") as f:
         proc = subprocess.Popen(
             cmd,
