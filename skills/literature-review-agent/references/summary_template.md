@@ -18,5 +18,3 @@
 ## Main Strengths
 
 ## Limitations
-
-## Relation to Our Work

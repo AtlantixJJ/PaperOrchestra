@@ -235,32 +235,59 @@ python skills/literature-review-agent/scripts/validate_pool.py \
 # Must pass before proceeding to Step 4.
 ```
 
-### 4. Build the required reference database
+### 4. Download PDFs and Build the Reference Database
 
 The literature review step MUST produce a local reference-paper database before
 building `refs.bib`. This database is the source of detailed paper summaries
 used by the writing step and by later manual review.
 
-Run the batch enrichment script to download PDFs, call `agy` to generate
-Markdown summaries for missing or corrupt references, and update the index.
-This one-call wrapper handles all iterative JSON parsing and PDF mechanics automatically.
+First, run the automated script to download PDFs from available links:
+
+```bash
+python skills/literature-review-agent/scripts/download_reference_pdfs.py \
+    --pool workspace/citation_pool.json
+```
+
+If any papers fail to download, the script will create `workspace/failed_downloads.json`. You (the host agent) MUST overlook this progress. For any missing PDFs listed in that file, you must search online, find the PDFs, and download them manually into `workspace/reference_database/papers/<bibtex_key>.pdf`.
+
+After verifying that all papers have a valid PDF, run the batch enrichment script to
+generate Markdown summaries and update the index. This wrapper only reads the PDFs and
+calls a summarization backend — it never looks papers up online.
+
+**Backend policy: prefer `llm`, fall back to `agent` (`agy`).** The script defaults to
+`--mode llm`, which summarizes via a direct `litellm` API call — this is faster, cheaper,
+and the preferred path. Only fall back to the agent backend for summaries the LLM path
+could not produce.
+
+**First pass — LLM (preferred):**
 
 ```bash
 python -u skills/literature-review-agent/scripts/build_reference_database.py \
     --pool workspace/citation_pool.json
 ```
 
+This requires `LITELLM_API_KEY` (and optionally `LITELLM_BASE_URL` / `LITELLM_TEXT_MODEL`)
+in the environment or in a `.env` the script can find.
+
+**Second pass — agent fallback, only if the LLM pass left summaries missing/corrupt:**
+re-running the script regenerates *only* the summaries the maintenance check still flags as
+`NEEDS_REGEN`, so this re-does just the LLM failures, now via the `agy` CLI subagent:
+
+```bash
+python -u skills/literature-review-agent/scripts/build_reference_database.py \
+    --pool workspace/citation_pool.json --mode agent --summary-command "agy"
+```
+
+> Note: `--summary-command` is only honored when `--mode agent`. Passing it under the
+> default `--mode llm` has no effect — the LLM backend is selected by the `LITELLM_*` env.
+
 Build or check the synchronized index:
 
 ```bash
-python skills/literature-review-agent/scripts/maintain_reference_database.py \
-    --pool workspace/citation_pool.json --fix
-
-python skills/literature-review-agent/scripts/maintain_reference_database.py \
-    --workspace workspace
+python skills/literature-review-agent/scripts/build_reference_database.py --pool workspace/citation_pool.json --maintain-only
 ```
 
-**CRITICAL GUARDRAIL:** Do NOT proceed to Step 5 (BibTeX generation) until `maintain_reference_database.py` exits with 0 errors.
+**CRITICAL GUARDRAIL:** Do NOT proceed to Step 5 (BibTeX generation) until `build_reference_database.py --maintain-only` exits with 0 errors. If it reports `NEEDS_REGEN`, re-run enrichment — first retry the LLM pass, then fall back to `--mode agent --summary-command "agy"` for any summaries that still fail.
 
 The index contains one row per verified paper:
 
@@ -278,7 +305,7 @@ The maintenance check fails when:
 - `index.json` is missing or stale.
 
 The reference database step is complete only when every verified paper has a
-Markdown summary and `maintain_reference_database.py --workspace workspace` exits 0.
+Markdown summary and `build_reference_database.py --pool workspace/citation_pool.json --maintain-only` exits 0.
 
 ### 5. Build the BibTeX file
 
@@ -297,7 +324,7 @@ canonical `bibtex_key` back into each paper record in `citation_pool.json`.
 The required pipeline is now:
 
 ```
-dedupe_by_id → validate_pool --fix → build_reference_database → maintain_reference_database → bibtex_format
+dedupe_by_id → validate_pool --fix → download_reference_pdfs → (manual agent fallback for missing PDFs) → build_reference_database → build_reference_database --maintain-only → bibtex_format
 ```
 
 ### 6. Draft Introduction + Related Work
@@ -402,9 +429,9 @@ If your host has no web search tool, switch to degraded mode:
 - `scripts/citation_coverage.py` — ≥90% citation coverage gate
 - `scripts/s2_search.py` — **NEW** Semantic Scholar title-search helper; reads `SEMANTIC_SCHOLAR_API_KEY` from env (optional — falls back to unauthenticated)
 - `scripts/exa_search.py` — optional Exa Phase 1 backend (reads `EXA_API_KEY` from env)
-- `scripts/build_reference_database.py` — required batch wrapper that downloads PDFs, calls `agy`, writes Markdown summaries, and updates the index for all verified papers
+- `scripts/build_reference_database.py` — required batch wrapper that reads the downloaded PDFs, summarizes them (default `--mode llm` via litellm; `--mode agent` falls back to a CLI subagent such as `agy`), writes Markdown summaries, and maintains the index (`--maintain-only`) for all verified papers
 - `scripts/common_subagent.py` — internal module imported by `build_reference_database.py`; provides `run_subagent()` for invoking `agy` subagents
-- `scripts/sync_reference_index.py` — internal dependency of `maintain_reference_database.py`; synchronizes `index.json` with summary files (not called directly in the pipeline)
-- `scripts/maintain_reference_database.py` — maintenance wrapper that checks pool/summary alignment and invokes regeneration
+- `scripts/sync_reference_index.py` — internal helper that synchronizes `index.json` with summary files (not called directly in the pipeline)
+- reference-database maintenance (pool/summary alignment check + regeneration) is built into `build_reference_database.py`; run it with `--maintain-only`
 - `references/summary_prompt.txt` — prompt template used by `build_reference_database.py` for paper summarization
 - `references/summary_template.md` — Markdown structure template for paper summaries

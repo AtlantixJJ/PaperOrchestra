@@ -4,91 +4,250 @@ build_reference_database.py — Batch wrapper for reference enrichment.
 
 The literature-review agent should call this script with a citation pool.
 The workspace is inferred as the directory containing that pool.
-The script handles all mechanics for every verified paper:
+For every verified paper the script:
 
-1. assign or preserve a stable bibtex_key,
-2. download/cache the PDF when an open PDF URL is available,
-3. call agy to create the structured Markdown summary,
-4. run reference-database maintenance so index.json reflects summaries.
+1. assigns or preserves a stable bibtex_key,
+2. summarizes the (already downloaded) PDF into structured Markdown — via the
+   litellm API by default (--mode llm), or a CLI subagent such as agy
+   (--mode agent),
+3. runs reference-database maintenance so index.json reflects the summaries.
+
+PDFs themselves are fetched separately by download_reference_pdfs.py.
 
 Usage:
     python build_reference_database.py --pool workspace/citation_pool.json
 """
 import argparse
+import concurrent.futures
+import datetime
+import functools
 import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
+import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 from bibtex_format import assign_bibtex_keys
-from maintain_reference_database import maintain_reference_database, pool_papers
+from common_subagent import run_subagent
 
-# --- Inlined from download_papers.py ---
-def arxiv_pdf_url(arxiv_id: str) -> str:
-    arxiv_id = arxiv_id.strip()
-    if not arxiv_id:
-        return ""
-    if arxiv_id.lower().startswith("arxiv:"):
-        arxiv_id = arxiv_id.split(":", 1)[1]
-    return f"https://arxiv.org/pdf/{arxiv_id}.pdf"
 
-def candidate_urls(paper: dict) -> list[tuple[str, str]]:
-    urls: list[tuple[str, str]] = []
+@dataclass
+class SummaryHealth:
+    key: str
+    path: Path
+    ok: bool
+    reason: str
 
-    open_access_pdf = paper.get("openAccessPdf") or {}
-    if isinstance(open_access_pdf, dict):
-        url = open_access_pdf.get("url")
-        if url:
-            urls.append(("openAccessPdf", url))
 
-    ext = paper.get("externalIds") or {}
-    if arxiv := ext.get("ArXiv"):
-        urls.append(("arxiv", arxiv_pdf_url(arxiv)))
+@dataclass
+class MaintenanceResult:
+    index_path: Path
+    rows: list[dict]
+    changed: bool
+    problems: list[str]
+    regenerate_keys: set[str]
 
-    for field in ("pdf_url", "pdfUrl", "url"):
-        url = paper.get(field)
-        if isinstance(url, str) and url.lower().endswith(".pdf"):
-            urls.append((field, url))
 
-    seen = set()
-    unique: list[tuple[str, str]] = []
-    for source, url in urls:
-        if url and url not in seen:
-            unique.append((source, url))
-            seen.add(url)
-    return unique
+def load_pool(path: Path) -> dict:
+    with path.open(encoding="utf-8") as f:
+        return json.load(f)
 
-def fetch_pdf(url: str, out_path: Path, timeout: int, user_agent: str) -> tuple[bool, str]:
-    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
+
+def pool_papers(pool_data: object) -> list[dict]:
+    if isinstance(pool_data, dict):
+        papers = pool_data.get("papers", [])
+        return papers if isinstance(papers, list) else []
+    return pool_data if isinstance(pool_data, list) else []
+
+
+def parse_frontmatter_text(text: str) -> dict:
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}
+    fields: dict[str, str] = {}
+    for line in text[3:end].splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        fields[key.strip()] = value.strip().strip('"')
+    return fields
+
+
+def first_heading(text: str) -> str:
+    match = re.search(r"^#\s+(.+?)\s*$", text, flags=re.M)
+    return match.group(1).strip() if match else ""
+
+
+def relative_to_workspace(path: Path, workspace: Path) -> str:
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            content_type = resp.headers.get("Content-Type", "").lower()
-            data = resp.read()
-    except urllib.error.HTTPError as exc:
-        return False, f"HTTP {exc.code}"
-    except urllib.error.URLError as exc:
-        return False, f"network error: {exc.reason}"
-    except TimeoutError:
-        return False, "timeout"
-
-    if not data.startswith(b"%PDF") and "pdf" not in content_type:
-        return False, f"not a PDF response: content-type={content_type or 'unknown'}"
-
-    out_path.write_bytes(data)
-    return True, f"{len(data)} bytes"
+        return os.path.relpath(path, workspace)
+    except ValueError:
+        return str(path)
 
 
-# --- Inlined from summarize_papers_gemini.py; this wrapper defaults to agy ---
+def pdf_status_for_summary(workspace: Path, key: str, fields: dict) -> str:
+    pdf_path = fields.get("pdf_path", "")
+    candidates: list[Path] = []
+    if pdf_path:
+        candidate = Path(pdf_path)
+        candidates.append(candidate if candidate.is_absolute() else workspace / candidate)
+    candidates.append(workspace / "reference_database" / "papers" / f"{key}.pdf")
+    return "existing" if any(path.exists() for path in candidates) else "missing"
+
+
+def summary_status(fields: dict) -> str:
+    return fields.get("summary_status", "").strip()
+
+
+def check_summary(summary_path: Path, expected_key: str) -> SummaryHealth:
+    if not summary_path.exists():
+        return SummaryHealth(expected_key, summary_path, False, "missing summary")
+
+    text = summary_path.read_text(encoding="utf-8", errors="replace")
+    fields = parse_frontmatter_text(text)
+    if not fields:
+        return SummaryHealth(expected_key, summary_path, False, "missing frontmatter")
+    if fields.get("bibtex_key") != expected_key:
+        return SummaryHealth(expected_key, summary_path, False, "frontmatter bibtex_key mismatch")
+    if summary_status(fields) != "complete":
+        return SummaryHealth(expected_key, summary_path, False, f"summary_status={summary_status(fields)!r}")
+    if not extract_technical_summary(summary_path):
+        return SummaryHealth(expected_key, summary_path, False, "missing technical summary")
+
+    return SummaryHealth(expected_key, summary_path, True, "")
+
+
+def row_from_summary(summary_path: Path, workspace: Path) -> tuple[dict, str]:
+    text = summary_path.read_text(encoding="utf-8", errors="replace")
+    fields = parse_frontmatter_text(text)
+    key = fields.get("bibtex_key") or summary_path.stem
+    status = summary_status(fields) or "unknown"
+    row = {
+        "bibtex_key": key,
+        "title": fields.get("title") or first_heading(text) or key,
+        "location": relative_to_workspace(summary_path, workspace),
+        "year": str(fields.get("year", "")),
+        "summary": extract_technical_summary(summary_path),
+        "status": f"{status};{pdf_status_for_summary(workspace, key, fields)}",
+    }
+    problem = "" if fields.get("bibtex_key") else f"{summary_path}: missing frontmatter bibtex_key"
+    return row, problem
+
+
+def index_rows_from_summaries(workspace: Path) -> tuple[list[dict], list[str]]:
+    summary_dir = workspace / "reference_database" / "summaries"
+    summary_dir.mkdir(parents=True, exist_ok=True)
+
+    rows: list[dict] = []
+    problems: list[str] = []
+    seen_keys: set[str] = set()
+    for summary_path in sorted(summary_dir.glob("*.md")):
+        row, problem = row_from_summary(summary_path, workspace)
+        key = row.get("bibtex_key", "")
+        if key in seen_keys:
+            problems.append(f"duplicate summary bibtex_key: {key}")
+            continue
+
+        if not row.get("summary"):
+            problems.append(f"omitted {summary_path.name}: missing technical summary")
+            continue
+
+        seen_keys.add(key)
+        rows.append(row)
+        if problem:
+            problems.append(problem)
+
+    rows.sort(key=lambda item: (item.get("title", ""), item.get("bibtex_key", "")))
+    return rows, problems
+
+
+def read_index(index_path: Path) -> list[dict]:
+    if not index_path.exists():
+        return []
+    try:
+        data = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    papers = data.get("papers", [])
+    return papers if isinstance(papers, list) else []
+
+
+def write_index(index_path: Path, rows: list[dict]) -> None:
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(json.dumps({"papers": rows}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def maintain_reference_database(
+    workspace: Path,
+    papers: list[dict] | None = None,
+    fix: bool = False,
+) -> MaintenanceResult:
+    workspace = workspace.resolve()
+    index_path = workspace / "reference_database" / "index.json"
+    rows, problems = index_rows_from_summaries(workspace)
+    existing_rows = read_index(index_path)
+    changed = existing_rows != rows
+
+    if changed and fix:
+        write_index(index_path, rows)
+    elif changed:
+        problems.append(f"index out of sync: {index_path}")
+
+    regenerate_keys: set[str] = set()
+    if papers is not None:
+        summary_dir = workspace / "reference_database" / "summaries"
+        seen_keys: set[str] = set()
+        for paper in papers:
+            key = paper.get("bibtex_key")
+            if not key:
+                problems.append(f"pool paper missing bibtex_key: {paper.get('title', 'unknown title')}")
+                continue
+            if key in seen_keys:
+                problems.append(f"duplicate bibtex_key in pool: {key}")
+            seen_keys.add(key)
+
+            health = check_summary(summary_dir / f"{key}.md", key)
+            if not health.ok:
+                regenerate_keys.add(key)
+                problems.append(f"{health.path}: {health.reason}")
+
+        summary_keys = {row.get("bibtex_key", "") for row in rows if row.get("bibtex_key")}
+        for key in sorted(summary_keys - seen_keys):
+            problems.append(f"{summary_dir / (key + '.md')}: orphan summary with no pool entry")
+
+    return MaintenanceResult(
+        index_path=index_path,
+        rows=rows,
+        changed=changed,
+        problems=problems,
+        regenerate_keys=regenerate_keys,
+    )
+
+
 SCRIPT_DIR = Path(__file__).parent.resolve()
-try:
-    TEMPLATE = (SCRIPT_DIR.parent / "references" / "summary_template.md").read_text(encoding="utf-8")
-    PROMPT = (SCRIPT_DIR.parent / "references" / "summary_prompt.txt").read_text(encoding="utf-8")
-except FileNotFoundError:
-    print("ERROR: Could not find summary_template.md or summary_prompt.txt in references/", file=sys.stderr)
-    sys.exit(1)
+REFERENCES_DIR = SCRIPT_DIR.parent / "references"
+
+
+@functools.lru_cache(maxsize=1)
+def load_summary_assets() -> tuple[str, str]:
+    """Return the (required) summary template and prompt, cached after first use.
+
+    Loaded lazily rather than at import time so that importing this module for
+    its helpers (e.g. pool_papers) never depends on these files existing.
+    """
+    try:
+        template = (REFERENCES_DIR / "summary_template.md").read_text(encoding="utf-8")
+        prompt = (REFERENCES_DIR / "summary_prompt.txt").read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"Required summary asset missing in {REFERENCES_DIR}: {exc.filename}"
+        ) from exc
+    return template, prompt
+
 
 def yaml_scalar(value: object) -> str:
     text = "" if value is None else str(value)
@@ -110,24 +269,11 @@ def s2_url(paper: dict) -> str:
     paper_id = paper.get("paperId")
     return f"https://www.semanticscholar.org/paper/{paper_id}" if paper_id else ""
 
-def parse_frontmatter(md: str) -> dict:
-    if not md.startswith("---"):
-        return {}
-    end = md.find("\n---", 3)
-    if end == -1:
-        return {}
-    fields = {}
-    for line in md[3:end].splitlines():
-        if ":" not in line:
-            continue
-        k, v = line.split(":", 1)
-        fields[k.strip()] = v.strip().strip('"')
-    return fields
-
 def fallback_summary(paper: dict, key: str, pdf_path: str, status: str) -> str:
+    template, _ = load_summary_assets()
     abstract = paper.get("abstract") or "No abstract is available in the citation pool."
     title = paper.get("title", key)
-    body = TEMPLATE.replace("# <title>", f"# {title}", 1)
+    body = template.replace("# <title>", f"# {title}", 1)
     body = body.replace(
         "(A concise but technical summary, including only the technical details and results, and it can include more technical details that the original abstract does not contain.)",
         abstract,
@@ -176,10 +322,6 @@ def clean_markdown_output(text: str) -> str:
         text = match.group(1).strip()
     return text + "\n"
 
-from common_subagent import run_subagent
-
-
-# --- Main Logic ---
 
 def extract_technical_summary(md_path: Path) -> str:
     if not md_path.exists():
@@ -189,12 +331,6 @@ def extract_technical_summary(md_path: Path) -> str:
     if match:
         return match.group(1).strip()
     return ""
-
-def ensure_key(paper: dict) -> str:
-    if paper.get("bibtex_key"):
-        return paper["bibtex_key"]
-    assign_bibtex_keys([paper])
-    return paper["bibtex_key"]
 
 def ensure_keys(papers: list[dict]) -> None:
     used = {paper["bibtex_key"] for paper in papers if paper.get("bibtex_key")}
@@ -211,52 +347,14 @@ def ensure_keys(papers: list[dict]) -> None:
         paper["bibtex_key"] = key
         used.add(key)
 
-def download_one(paper: dict, pdf_path: Path, timeout: int, user_agent: str, force: bool) -> dict:
-    record = {
-        "pdf_status": "missing",
-        "pdf_path": "",
-        "pdf_source": "",
-        "pdf_url": "",
-        "pdf_message": "",
-    }
-    if pdf_path.exists() and not force:
-        record.update({
-            "pdf_status": "existing",
-            "pdf_path": str(pdf_path),
-            "pdf_message": f"{pdf_path.stat().st_size} bytes",
-        })
-        return record
-
-    urls = candidate_urls(paper)
-    if not urls:
-        record["pdf_message"] = "no open-access PDF URL in metadata"
-        return record
-
-    pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    for source, url in urls:
-        ok, message = fetch_pdf(url, pdf_path, timeout, user_agent)
-        record.update({
-            "pdf_source": source,
-            "pdf_url": url,
-            "pdf_message": message,
-        })
-        if ok:
-            record["pdf_status"] = "downloaded"
-            record["pdf_path"] = str(pdf_path)
-            return record
-
-    return record
-
 def summarize_one(
     paper: dict,
     key: str,
     workspace: Path,
     summary_path: Path,
-    prompt_path: Path,
     pdf_path: Path,
     summary_command: str,
     timeout: int,
-    force: bool,
     dry_run: bool,
     fallback_on_error: bool,
     mode: str,
@@ -264,31 +362,20 @@ def summarize_one(
     record = {
         "summary_status": "missing",
         "summary_md_path": "",
-        "prompt_path": "",
         "one_word_summary": "",
         "summary_message": "",
     }
 
-    if summary_path.exists() and not force:
-        fields = parse_frontmatter(summary_path.read_text(errors="replace"))
-        record.update({
-            "summary_status": fields.get("summary_status", "existing"),
-            "summary_md_path": str(summary_path),
-            "prompt_path": str(prompt_path) if prompt_path.exists() else "",
-            "one_word_summary": fields.get("one_word_summary", ""),
-            "summary_message": "existing summary",
-        })
-        return record
-
     rel_pdf_yaml = f"papers/{key}.pdf" if pdf_path.exists() else ""
     metadata = json.dumps(paper, indent=2, ensure_ascii=False)
-    
+
     if mode == "llm":
         if pdf_path.exists():
             try:
                 import pypdf
                 reader = pypdf.PdfReader(str(pdf_path))
                 pdf_text = "".join(page.extract_text() or "" for page in reader.pages)
+                pdf_text = pdf_text.encode("utf-8", "replace").decode("utf-8")
                 pdf_info = f"Extracted PDF Text:\n{pdf_text[:150000]}"
             except Exception as e:
                 pdf_info = f"(Failed to extract text from PDF: {e})"
@@ -297,11 +384,13 @@ def summarize_one(
     else:
         pdf_info = str(pdf_path.resolve()) if pdf_path.exists() else "(no local PDF available)"
 
-    prompt = PROMPT.format(
-        summary_template=TEMPLATE.rstrip(),
+    template, prompt_template = load_summary_assets()
+    prompt = prompt_template.format(
+        summary_template=template.rstrip(),
         metadata=metadata,
         pdf_path=pdf_info,
     )
+    prompt += "\n\nCRITICAL: DO NOT call any tools to search online. You must only use the provided metadata and PDF text to generate the summary."
     summary_path.parent.mkdir(parents=True, exist_ok=True)
 
     if dry_run:
@@ -309,29 +398,24 @@ def summarize_one(
         record.update({
             "summary_status": "prompt_only",
             "summary_md_path": str(summary_path),
-            "prompt_path": str(prompt_path),
             "summary_message": "dry-run placeholder written",
         })
         return record
 
     if mode == "llm":
         try:
-            import os
             from dotenv import load_dotenv, find_dotenv
             import litellm
 
-            # Attempt to load from parent directories if not already set
+            # Load a .env discovered from the current working directory upward,
+            # if the key isn't already in the environment.
             if not os.environ.get("LITELLM_API_KEY"):
                 load_dotenv(find_dotenv(usecwd=True))
-                if not os.environ.get("LITELLM_API_KEY"):
-                    # Fallback to absolute path
-                    load_dotenv("/Users/atlantix/Desktop/3DV 2027/.env")
 
             base_url = os.environ.get("LITELLM_BASE_URL")
             llm_model = os.environ.get("LITELLM_TEXT_MODEL", "gemini-2.5-pro")
             api_key = os.environ.get("LITELLM_API_KEY")
 
-            # Use openai/ prefix to route properly via litellm to an OpenAI-compatible proxy if base_url is set
             model_name = f"openai/{llm_model}" if base_url else llm_model
 
             response = litellm.completion(
@@ -339,6 +423,7 @@ def summarize_one(
                 messages=[{"role": "user", "content": prompt}],
                 api_base=base_url,
                 api_key=api_key,
+                timeout=timeout,
             )
             code, stdout, stderr = 0, response.choices[0].message.content, ""
         except Exception as exc:
@@ -357,25 +442,20 @@ def summarize_one(
             pdf_path=rel_pdf_yaml,
             status="complete",
         )
-        fields = parse_frontmatter(md)
+        fields = parse_frontmatter_text(md)
         if fields.get("bibtex_key") != key:
             summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "needs_review"))
             record.update({
                 "summary_status": "needs_review",
                 "summary_md_path": str(summary_path),
-                "prompt_path": str(prompt_path),
                 "summary_message": "summary output bibtex_key did not match canonical key",
             })
             return record
 
         summary_path.write_text(md)
-        fields = parse_frontmatter(md)
-        if not fields.get("one_word_summary"):
-            fields["one_word_summary"] = ""
         record.update({
             "summary_status": fields.get("summary_status", "complete"),
             "summary_md_path": str(summary_path),
-            "prompt_path": str(prompt_path),
             "one_word_summary": fields.get("one_word_summary", ""),
             "summary_message": "LLM summary written" if mode == "llm" else "agy summary written",
         })
@@ -386,7 +466,6 @@ def summarize_one(
         record.update({
             "summary_status": "llm_failed" if mode == "llm" else "agy_failed",
             "summary_md_path": str(summary_path),
-            "prompt_path": str(prompt_path),
             "summary_message": stderr.strip()[:500],
         })
         return record
@@ -397,30 +476,48 @@ def build_reference_database(
     pool_path: Path,
     summary_command: str,
     timeout: int,
-    download_timeout: int,
     force: bool,
     dry_run: bool,
     fallback_on_error: bool,
-    user_agent: str,
     mode: str,
+    workers: int,
 ) -> int:
     pool_path = pool_path.resolve()
     workspace = pool_path.parent
 
     if not pool_path.exists():
-        sys.exit(f"ERROR: Pool file not found: {pool_path}")
+        print(f"ERROR: Pool file not found: {pool_path}", file=sys.stderr)
+        return 1
 
-    with pool_path.open("r", encoding="utf-8") as f:
-        pool_data = json.load(f)
-
-    papers = pool_papers(pool_data)
+    papers = pool_papers(load_pool(pool_path))
     if not papers:
         print("No papers found in pool.")
         return 0
 
+    # Summarization needs the template/prompt; fail fast with a clear message.
+    try:
+        load_summary_assets()
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
     ensure_keys(papers)
 
     ref_dir = workspace / "reference_database"
+
+    missing_pdfs = []
+    for paper in papers:
+        key = paper["bibtex_key"]
+        pdf_path = ref_dir / "papers" / f"{key}.pdf"
+        if not pdf_path.exists():
+            missing_pdfs.append(key)
+
+    if missing_pdfs:
+        print(f"ERROR: Verification failed. {len(missing_pdfs)} PDFs are missing. All papers must have a valid PDF before summarization.", file=sys.stderr)
+        for key in missing_pdfs:
+            print(f"  Missing: {key}.pdf", file=sys.stderr)
+        return 1
+
     maintenance = maintain_reference_database(workspace=workspace, papers=papers, fix=True)
     keys_to_regenerate = {paper["bibtex_key"] for paper in papers} if force else maintenance.regenerate_keys
 
@@ -436,62 +533,59 @@ def build_reference_database(
         if key in keys_to_regenerate:
             print(f"WARN: {problem}", file=sys.stderr)
 
+    skipped_papers = []
+    papers_to_enrich = []
     for i, paper in enumerate(papers):
-        title = paper.get("title", "Unknown Title")
-        key = ensure_key(paper)
-
+        key = paper["bibtex_key"]
         if key not in keys_to_regenerate:
-            print(f"\n--- Skipping paper {i+1}/{len(papers)}: {title} ({key}) ---")
-            print(f"[{key}] Reference summary is already valid.")
-            continue
+            skipped_papers.append((i, paper, key))
+        else:
+            papers_to_enrich.append((i, paper, key))
 
-        print(f"\n--- Enriching paper {i+1}/{len(papers)}: {title} ---")
+    for i, paper, key in skipped_papers:
+        title = paper.get("title", "Unknown Title")
+        print(f"--- Skipping paper {i+1}/{len(papers)}: {title} ({key}) ---")
+        print(f"[{key}] Reference summary is already valid.")
 
-        pdf_path = ref_dir / "papers" / f"{key}.pdf"
-        summary_path = ref_dir / "summaries" / f"{key}.md"
-        prompt_path = ref_dir / "prompts" / f"{key}.prompt.txt"
+    total_to_enrich = len(papers_to_enrich)
+    if total_to_enrich > 0:
+        print(f"\nStarting multithreaded enrichment for {total_to_enrich} papers...")
+        completed = 0
+        counter_lock = threading.Lock()
 
-        pdf_record = download_one(
-            paper=paper,
-            pdf_path=pdf_path,
-            timeout=download_timeout,
-            user_agent=user_agent,
-            force=force,
-        )
-        summary_record = summarize_one(
-            paper=paper,
-            key=key,
-            workspace=workspace,
-            summary_path=summary_path,
-            prompt_path=prompt_path,
-            pdf_path=pdf_path,
-            summary_command=summary_command,
-            timeout=timeout,
-            force=True,
-            dry_run=dry_run,
-            fallback_on_error=fallback_on_error,
-            mode=mode,
-        )
+        def process_paper(args_tuple):
+            nonlocal completed
+            i, paper, key = args_tuple
+            title = paper.get("title", "Unknown Title")
 
-        result = {
-            "bibtex_key": key,
-            "title": paper.get("title", ""),
-            "year": paper.get("year", ""),
-            "venue": paper.get("venue", ""),
-            "paper_id": paper.get("paperId", ""),
-            "semantic_scholar_url": s2_url(paper),
-            **pdf_record,
-            **summary_record,
-        }
+            print(f"\n--- Enriching paper {i+1}/{len(papers)}: {title} ---")
 
-        for field in ("pdf_path", "summary_md_path", "prompt_path"):
-            if result.get(field):
-                try:
-                    result[field] = os.path.relpath(result[field], workspace)
-                except ValueError:
-                    pass
+            pdf_path = ref_dir / "papers" / f"{key}.pdf"
+            summary_path = ref_dir / "summaries" / f"{key}.md"
+            pdf_status = "existing" if pdf_path.exists() else "missing"
 
-        print(f"[{key}] PDF: {pdf_record['pdf_status']} | Summary: {summary_record['summary_status']}")
+            summary_record = summarize_one(
+                paper=paper,
+                key=key,
+                workspace=workspace,
+                summary_path=summary_path,
+                pdf_path=pdf_path,
+                summary_command=summary_command,
+                timeout=timeout,
+                dry_run=dry_run,
+                fallback_on_error=fallback_on_error,
+                mode=mode,
+            )
+
+            with counter_lock:
+                completed += 1
+                done = completed
+
+            print(f"[{key}] PDF: {pdf_status} | Summary: {summary_record['summary_status']}")
+            print(f"finished summarizing {key}. ... {done}/{total_to_enrich}")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            list(executor.map(process_paper, papers_to_enrich))
 
     final_maintenance = maintain_reference_database(workspace=workspace, papers=papers, fix=True)
     if final_maintenance.changed:
@@ -502,32 +596,77 @@ def build_reference_database(
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--pool", required=True)
-    p.add_argument("--summary-command", default="agy")
-    p.add_argument("--gemini-command", help="Deprecated alias for --summary-command.")
-    p.add_argument("--timeout", type=int, default=600)
-    p.add_argument("--download-timeout", type=int, default=45)
-    p.add_argument("--force", action="store_true")
-    p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--fallback-on-error", action="store_true")
-    p.add_argument(
-        "--user-agent",
-        default="PaperOrchestra literature-review-agent reference enrichment",
-    )
-    p.add_argument("--mode", choices=["agent", "llm"], default="agent", help="Mode for calling LLM: 'agent' (CLI wrapper) or 'llm' (direct SDK with PDF text)")
-    args = p.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pool", required=True)
+    parser.add_argument("--summary-command", default="agy")
+    parser.add_argument("--gemini-command", help="Deprecated alias for --summary-command.")
+    parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--fallback-on-error", action="store_true")
+    parser.add_argument("--mode", choices=["agent", "llm"], default="llm",
+                        help="Summarization backend. 'llm' (default, preferred): direct litellm API call. "
+                             "'agent': CLI subagent named by --summary-command (e.g. agy) — use as a fallback when llm fails.")
+    parser.add_argument("--workers", type=int, default=None, help="Number of concurrent workers (default: 4 for agent, 100 for llm)")
+    parser.add_argument("--maintain-only", action="store_true", help="Only run reference database maintenance and check, skipping summarization")
+    args = parser.parse_args()
+
+    if args.workers is None:
+        args.workers = 4 if args.mode == "agent" else 100
+
+    workspace = Path(args.pool).resolve().parent
+
+    log_dir = workspace / "reference_database" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"build_{timestamp}.log"
+
+    log_handle = open(log_file, "a", encoding="utf-8")
+    log_lock = threading.Lock()
+
+    class TeeLogger:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def write(self, data):
+            with log_lock:
+                self.stream.write(data)
+                self.stream.flush()
+                log_handle.write(data)
+                log_handle.flush()
+
+        def flush(self):
+            self.stream.flush()
+
+    sys.stdout = TeeLogger(sys.stdout)
+    sys.stderr = TeeLogger(sys.stderr)
+
+    print(f"Logging unbuffered output to {log_file}")
+
+    if args.maintain_only:
+        papers = pool_papers(load_pool(Path(args.pool)))
+        result = maintain_reference_database(workspace=workspace, papers=papers, fix=True)
+        if result.changed:
+            print(f"OK: wrote {len(result.rows)} rows -> {result.index_path}")
+        else:
+            print(f"OK: reference index synchronized ({len(result.rows)} summaries)")
+        if result.regenerate_keys:
+            print(f"NEEDS_REGEN: {', '.join(sorted(result.regenerate_keys))}")
+        if result.problems:
+            for problem in result.problems:
+                print(f"WARN: {problem}", file=sys.stderr)
+            return 1
+        return 0
 
     return build_reference_database(
         pool_path=Path(args.pool),
         summary_command=args.gemini_command or args.summary_command,
         timeout=args.timeout,
-        download_timeout=args.download_timeout,
         force=args.force,
         dry_run=args.dry_run,
         fallback_on_error=args.fallback_on_error,
-        user_agent=args.user_agent,
         mode=args.mode,
+        workers=args.workers,
     )
 
 if __name__ == "__main__":
