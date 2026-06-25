@@ -160,7 +160,7 @@ auth, retries, and 429 back-off automatically:
 
 ```bash
 python skills/literature-review-agent/scripts/s2_search.py \
-    --query "<URL-decoded candidate title>" --limit 5
+    --query "<URL-decoded candidate title>" --limit 5 --env .env
 # If SEMANTIC_SCHOLAR_API_KEY is set the key is forwarded automatically.
 # If not, the public unauthenticated endpoint is used (≤1 QPS, still works).
 ```
@@ -168,7 +168,7 @@ python skills/literature-review-agent/scripts/s2_search.py \
 Check whether the key is configured before starting Phase 2:
 
 ```bash
-python skills/literature-review-agent/scripts/s2_search.py --check-key
+python skills/literature-review-agent/scripts/s2_search.py --check-key --env .env
 ```
 
 **Fallback:** if you prefer your host's URL fetch tool, GET:

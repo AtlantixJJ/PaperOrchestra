@@ -20,6 +20,7 @@ Usage:
 import argparse
 import concurrent.futures
 import datetime
+import enum
 import functools
 import json
 import os
@@ -31,6 +32,41 @@ from pathlib import Path
 
 from bibtex_format import assign_bibtex_keys
 from common_subagent import run_subagent
+
+
+# --- Types ---
+
+class Mode(str, enum.Enum):
+    """Summarization backend. Subclasses str so values compare/serialize plainly."""
+    LLM = "llm"
+    AGENT = "agent"
+
+
+def backend_label(mode: "Mode") -> str:
+    """Human-facing backend name used in messages and status strings."""
+    return "LLM" if mode is Mode.LLM else "agy"
+
+
+class SummaryError(RuntimeError):
+    """Raised when a summary cannot be produced and fallback is disabled."""
+
+
+@dataclass
+class Problem:
+    """A maintenance problem, optionally attributable to a specific bibtex_key."""
+    message: str
+    key: str | None = None
+
+    def __str__(self) -> str:
+        return self.message
+
+
+@dataclass
+class SummaryResult:
+    summary_status: str = "missing"
+    summary_md_path: str = ""
+    one_word_summary: str = ""
+    summary_message: str = ""
 
 
 @dataclass
@@ -46,9 +82,11 @@ class MaintenanceResult:
     index_path: Path
     rows: list[dict]
     changed: bool
-    problems: list[str]
+    problems: list[Problem]
     regenerate_keys: set[str]
 
+
+# --- Pool & frontmatter helpers ---
 
 def load_pool(path: Path) -> dict:
     with path.open(encoding="utf-8") as f:
@@ -103,6 +141,8 @@ def summary_status(fields: dict) -> str:
     return fields.get("summary_status", "").strip()
 
 
+# --- Reference index maintenance ---
+
 def check_summary(summary_path: Path, expected_key: str) -> SummaryHealth:
     if not summary_path.exists():
         return SummaryHealth(expected_key, summary_path, False, "missing summary")
@@ -121,7 +161,7 @@ def check_summary(summary_path: Path, expected_key: str) -> SummaryHealth:
     return SummaryHealth(expected_key, summary_path, True, "")
 
 
-def row_from_summary(summary_path: Path, workspace: Path) -> tuple[dict, str]:
+def row_from_summary(summary_path: Path, workspace: Path) -> tuple[dict, Problem | None]:
     text = summary_path.read_text(encoding="utf-8", errors="replace")
     fields = parse_frontmatter_text(text)
     key = fields.get("bibtex_key") or summary_path.stem
@@ -134,26 +174,28 @@ def row_from_summary(summary_path: Path, workspace: Path) -> tuple[dict, str]:
         "summary": extract_technical_summary(summary_path),
         "status": f"{status};{pdf_status_for_summary(workspace, key, fields)}",
     }
-    problem = "" if fields.get("bibtex_key") else f"{summary_path}: missing frontmatter bibtex_key"
+    problem = None if fields.get("bibtex_key") else Problem(
+        f"{summary_path}: missing frontmatter bibtex_key", key=key
+    )
     return row, problem
 
 
-def index_rows_from_summaries(workspace: Path) -> tuple[list[dict], list[str]]:
+def index_rows_from_summaries(workspace: Path) -> tuple[list[dict], list[Problem]]:
     summary_dir = workspace / "reference_database" / "summaries"
     summary_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict] = []
-    problems: list[str] = []
+    problems: list[Problem] = []
     seen_keys: set[str] = set()
     for summary_path in sorted(summary_dir.glob("*.md")):
         row, problem = row_from_summary(summary_path, workspace)
         key = row.get("bibtex_key", "")
         if key in seen_keys:
-            problems.append(f"duplicate summary bibtex_key: {key}")
+            problems.append(Problem(f"duplicate summary bibtex_key: {key}", key=key))
             continue
 
         if not row.get("summary"):
-            problems.append(f"omitted {summary_path.name}: missing technical summary")
+            problems.append(Problem(f"omitted {summary_path.name}: missing technical summary", key=key))
             continue
 
         seen_keys.add(key)
@@ -195,7 +237,7 @@ def maintain_reference_database(
     if changed and fix:
         write_index(index_path, rows)
     elif changed:
-        problems.append(f"index out of sync: {index_path}")
+        problems.append(Problem(f"index out of sync: {index_path}"))
 
     regenerate_keys: set[str] = set()
     if papers is not None:
@@ -204,20 +246,20 @@ def maintain_reference_database(
         for paper in papers:
             key = paper.get("bibtex_key")
             if not key:
-                problems.append(f"pool paper missing bibtex_key: {paper.get('title', 'unknown title')}")
+                problems.append(Problem(f"pool paper missing bibtex_key: {paper.get('title', 'unknown title')}"))
                 continue
             if key in seen_keys:
-                problems.append(f"duplicate bibtex_key in pool: {key}")
+                problems.append(Problem(f"duplicate bibtex_key in pool: {key}", key=key))
             seen_keys.add(key)
 
             health = check_summary(summary_dir / f"{key}.md", key)
             if not health.ok:
                 regenerate_keys.add(key)
-                problems.append(f"{health.path}: {health.reason}")
+                problems.append(Problem(f"{health.path}: {health.reason}", key=health.key))
 
         summary_keys = {row.get("bibtex_key", "") for row in rows if row.get("bibtex_key")}
         for key in sorted(summary_keys - seen_keys):
-            problems.append(f"{summary_dir / (key + '.md')}: orphan summary with no pool entry")
+            problems.append(Problem(f"{summary_dir / (key + '.md')}: orphan summary with no pool entry", key=key))
 
     return MaintenanceResult(
         index_path=index_path,
@@ -227,6 +269,8 @@ def maintain_reference_database(
         regenerate_keys=regenerate_keys,
     )
 
+
+# --- Summary generation ---
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 REFERENCES_DIR = SCRIPT_DIR.parent / "references"
@@ -357,19 +401,12 @@ def summarize_one(
     timeout: int,
     dry_run: bool,
     fallback_on_error: bool,
-    mode: str,
-) -> dict:
-    record = {
-        "summary_status": "missing",
-        "summary_md_path": "",
-        "one_word_summary": "",
-        "summary_message": "",
-    }
-
+    mode: Mode,
+) -> SummaryResult:
     rel_pdf_yaml = f"papers/{key}.pdf" if pdf_path.exists() else ""
     metadata = json.dumps(paper, indent=2, ensure_ascii=False)
 
-    if mode == "llm":
+    if mode is Mode.LLM:
         if pdf_path.exists():
             try:
                 import pypdf
@@ -395,14 +432,15 @@ def summarize_one(
 
     if dry_run:
         summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "prompt_only"))
-        record.update({
-            "summary_status": "prompt_only",
-            "summary_md_path": str(summary_path),
-            "summary_message": "dry-run placeholder written",
-        })
-        return record
+        return SummaryResult(
+            summary_status="prompt_only",
+            summary_md_path=str(summary_path),
+            summary_message="dry-run placeholder written",
+        )
 
-    if mode == "llm":
+    # Broad except is intentional: any backend failure (network, auth, parsing,
+    # subprocess) is converted into a non-zero code so we can fall back below.
+    if mode is Mode.LLM:
         try:
             from dotenv import load_dotenv, find_dotenv
             import litellm
@@ -434,6 +472,7 @@ def summarize_one(
         except Exception as exc:
             code, stdout, stderr = 1, "", str(exc)
 
+    label = backend_label(mode)
     if code == 0 and stdout.strip():
         md = apply_summary_frontmatter(
             clean_markdown_output(stdout),
@@ -445,32 +484,31 @@ def summarize_one(
         fields = parse_frontmatter_text(md)
         if fields.get("bibtex_key") != key:
             summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "needs_review"))
-            record.update({
-                "summary_status": "needs_review",
-                "summary_md_path": str(summary_path),
-                "summary_message": "summary output bibtex_key did not match canonical key",
-            })
-            return record
+            return SummaryResult(
+                summary_status="needs_review",
+                summary_md_path=str(summary_path),
+                summary_message="summary output bibtex_key did not match canonical key",
+            )
 
         summary_path.write_text(md)
-        record.update({
-            "summary_status": fields.get("summary_status", "complete"),
-            "summary_md_path": str(summary_path),
-            "one_word_summary": fields.get("one_word_summary", ""),
-            "summary_message": "LLM summary written" if mode == "llm" else "agy summary written",
-        })
-        return record
+        return SummaryResult(
+            summary_status=fields.get("summary_status", "complete"),
+            summary_md_path=str(summary_path),
+            one_word_summary=fields.get("one_word_summary", ""),
+            summary_message=f"{label} summary written",
+        )
 
     if fallback_on_error:
-        summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "llm_failed" if mode == "llm" else "agy_failed"))
-        record.update({
-            "summary_status": "llm_failed" if mode == "llm" else "agy_failed",
-            "summary_md_path": str(summary_path),
-            "summary_message": stderr.strip()[:500],
-        })
-        return record
+        summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, f"{label.lower()}_failed"))
+        return SummaryResult(
+            summary_status=f"{label.lower()}_failed",
+            summary_md_path=str(summary_path),
+            summary_message=stderr.strip()[:500],
+        )
 
-    raise SystemExit(f"ERROR: summary command failed for {key}: {stderr.strip()[:500]}")
+    raise SummaryError(f"summary command failed for {key}: {stderr.strip()[:500]}")
+
+# --- Batch driver & CLI ---
 
 def build_reference_database(
     pool_path: Path,
@@ -479,7 +517,7 @@ def build_reference_database(
     force: bool,
     dry_run: bool,
     fallback_on_error: bool,
-    mode: str,
+    mode: Mode,
     workers: int,
 ) -> int:
     pool_path = pool_path.resolve()
@@ -529,9 +567,8 @@ def build_reference_database(
         print("No missing or corrupt references found.")
 
     for problem in maintenance.problems:
-        key = Path(problem.split(":", 1)[0]).stem if ":" in problem else ""
-        if key in keys_to_regenerate:
-            print(f"WARN: {problem}", file=sys.stderr)
+        if problem.key in keys_to_regenerate:
+            print(f"WARN: {problem.message}", file=sys.stderr)
 
     skipped_papers = []
     papers_to_enrich = []
@@ -581,11 +618,15 @@ def build_reference_database(
                 completed += 1
                 done = completed
 
-            print(f"[{key}] PDF: {pdf_status} | Summary: {summary_record['summary_status']}")
+            print(f"[{key}] PDF: {pdf_status} | Summary: {summary_record.summary_status}")
             print(f"finished summarizing {key}. ... {done}/{total_to_enrich}")
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            list(executor.map(process_paper, papers_to_enrich))
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                list(executor.map(process_paper, papers_to_enrich))
+        except SummaryError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
 
     final_maintenance = maintain_reference_database(workspace=workspace, papers=papers, fix=True)
     if final_maintenance.changed:
@@ -604,15 +645,16 @@ def main():
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--fallback-on-error", action="store_true")
-    parser.add_argument("--mode", choices=["agent", "llm"], default="llm",
+    parser.add_argument("--mode", choices=[m.value for m in Mode], default=Mode.LLM.value,
                         help="Summarization backend. 'llm' (default, preferred): direct litellm API call. "
                              "'agent': CLI subagent named by --summary-command (e.g. agy) — use as a fallback when llm fails.")
     parser.add_argument("--workers", type=int, default=None, help="Number of concurrent workers (default: 4 for agent, 100 for llm)")
     parser.add_argument("--maintain-only", action="store_true", help="Only run reference database maintenance and check, skipping summarization")
     args = parser.parse_args()
 
+    mode = Mode(args.mode)
     if args.workers is None:
-        args.workers = 4 if args.mode == "agent" else 100
+        args.workers = 4 if mode is Mode.AGENT else 100
 
     workspace = Path(args.pool).resolve().parent
 
@@ -654,7 +696,7 @@ def main():
             print(f"NEEDS_REGEN: {', '.join(sorted(result.regenerate_keys))}")
         if result.problems:
             for problem in result.problems:
-                print(f"WARN: {problem}", file=sys.stderr)
+                print(f"WARN: {problem.message}", file=sys.stderr)
             return 1
         return 0
 
@@ -665,7 +707,7 @@ def main():
         force=args.force,
         dry_run=args.dry_run,
         fallback_on_error=args.fallback_on_error,
-        mode=args.mode,
+        mode=mode,
         workers=args.workers,
     )
 

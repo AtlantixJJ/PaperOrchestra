@@ -41,6 +41,28 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+def _load_env_file(env_path: str):
+    """Load an explicitly provided .env file."""
+    path = Path(env_path)
+    if not path.is_file():
+        print(f"WARN: Specified .env file not found: {env_path}", file=sys.stderr)
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    k, v = k.strip(), v.strip()
+                    if v.startswith('"') and v.endswith('"'):
+                        v = v[1:-1]
+                    elif v.startswith("'") and v.endswith("'"):
+                        v = v[1:-1]
+                    os.environ.setdefault(k, v)
+    except Exception as e:
+        print(f"WARN: Failed to parse .env file: {e}", file=sys.stderr)
 
 S2_BASE = "https://api.semanticscholar.org/graph/v1"
 DEFAULT_FIELDS = "title,abstract,year,authors,venue,externalIds,openAccessPdf"
@@ -141,6 +163,10 @@ def main() -> int:
         help=f"Comma-separated S2 fields to request (default: {DEFAULT_FIELDS})",
     )
     p.add_argument(
+        "--env", type=str,
+        help="Path to a .env file to load (e.g. for SEMANTIC_SCHOLAR_API_KEY)",
+    )
+    p.add_argument(
         "--raw", action="store_true",
         help="Print the full S2 JSON response unmodified instead of normalized output",
     )
@@ -149,6 +175,9 @@ def main() -> int:
         help="Print whether SEMANTIC_SCHOLAR_API_KEY is set and exit (no network call)",
     )
     args = p.parse_args()
+
+    if args.env:
+        _load_env_file(args.env)
 
     if args.check_key:
         key = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "").strip()
