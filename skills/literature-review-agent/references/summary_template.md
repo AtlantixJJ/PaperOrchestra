@@ -11,9 +11,10 @@
 ## Inputs and Assumptions
 
 ## Training and Inference
+(Explicitly list any datasets used for training, including their specific names, statistics, and whether the paper introduces a new dataset contribution.)
 
 ## Evaluation
-(Include concrete numbers and metrics.)
+(Include concrete numbers and metrics. Explicitly name the evaluation datasets.)
 
 ## Main Strengths
 
