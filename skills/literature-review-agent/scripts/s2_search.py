@@ -8,10 +8,10 @@ each candidate from Phase 1 before adding it to citation_pool.json.
 
 API key (optional):
     If SEMANTIC_SCHOLAR_API_KEY is set in the environment the key is forwarded
-    via the ``x-api-key`` header, which raises the rate limit from ~100 req/5 min
-    (unauthenticated) to 1 req/s sustained with higher burst headroom.
+    via the ``x-api-key`` header, which raises the rate limit and burst headroom
+    above the unauthenticated baseline of ~1 query per second.
     If the variable is absent the script falls back to the public unauthenticated
-    endpoint — the pipeline works fine without a key; just keep to ≤1 QPS.
+    endpoint — the pipeline works fine without a key; just keep to ≤1 query per second.
 
     Get a free key at: https://api.semanticscholar.org/
     Then export it once before running the pipeline:
@@ -188,7 +188,7 @@ def main() -> int:
         else:
             print(
                 "SEMANTIC_SCHOLAR_API_KEY is NOT set. "
-                "Unauthenticated mode: ~100 req/5 min, keep to ≤1 QPS.\n"
+                "Unauthenticated mode: keep to ≤1 query per second.\n"
                 "To enable higher rate limits:\n"
                 "  1. Get a free key at https://api.semanticscholar.org/\n"
                 '  2. export SEMANTIC_SCHOLAR_API_KEY="your-key-here"'

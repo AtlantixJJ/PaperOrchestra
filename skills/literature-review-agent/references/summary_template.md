@@ -16,6 +16,9 @@
 ## Evaluation
 (Include concrete numbers and metrics. Explicitly name the evaluation datasets.)
 
+## Key Takeaways
+(The key conclusion, main insight claimed and explored)
+
 ## Main Strengths
 
 ## Limitations

@@ -59,12 +59,13 @@ Implementation: `scripts/check_cutoff.py`. Comparison rules:
 
 Examples (cutoff = 2024-10-01):
 
-| Paper year | Paper month | Verdict |
-|---|---|---|
-| 2017 | — | accept |
-| 2024 | 9 | accept (2024-09-01 < 2024-10-01) |
-| 2024 | 10 | reject (2024-10-01 not strictly < 2024-10-01) |
-| 2024 | — (only year) | reject (2024-12-31 ≥ 2024-10-01) |
+| Paper year | Paper month | Paper date | Verdict |
+|---|---|---|---|
+| 2017 | — | — | accept |
+| 2024 | 9 | — | accept (2024-09-01 < 2024-10-01) |
+| — | — | 2024-09-15 | accept (2024-09-15 < 2024-10-01) |
+| 2024 | 10 | — | reject (2024-10-01 not strictly < 2024-10-01) |
+| 2024 | — (only year) | — | reject (2024-12-31 ≥ 2024-10-01) |
 
 The strict comparison is intentional: it prevents leakage of papers from
 the same submission cycle as the target venue.

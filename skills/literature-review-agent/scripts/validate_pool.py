@@ -33,14 +33,16 @@ RECOMMENDED_PAPER_FIELDS = ["paperId", "abstract", "venue", "authors"]
 REQUIRED_TOP_FIELDS = ["papers", "min_cite_paper_count"]
 
 
-def validate_and_fix(pool: dict, fix: bool) -> tuple[list[str], list[str], int]:
+def validate_and_fix(pool: dict, fix: bool) -> tuple[list[str], list[str], int, int]:
     """
-    Returns (errors, warnings, n_fixed).
+    Returns (errors, warnings, n_fixed, unrecoverable).
+    `unrecoverable` counts missing-required-field errors that --fix cannot repair.
     If fix=True, mutates pool in place where possible.
     """
     errors: list[str] = []
     warnings: list[str] = []
     n_fixed = 0
+    unrecoverable = 0
 
     # Top-level structure
     for field in REQUIRED_TOP_FIELDS:
@@ -80,13 +82,14 @@ def validate_and_fix(pool: dict, fix: bool) -> tuple[list[str], list[str], int]:
         for field in REQUIRED_PAPER_FIELDS:
             if not paper.get(field):
                 errors.append(f"[{label}] missing required field '{field}'")
+                unrecoverable += 1
 
         # --- Recommended fields ---
         for field in RECOMMENDED_PAPER_FIELDS:
             if not paper.get(field):
                 warnings.append(f"[{label}] missing recommended field '{field}'")
 
-    return errors, warnings, n_fixed
+    return errors, warnings, n_fixed, unrecoverable
 
 
 def main() -> int:
@@ -101,7 +104,7 @@ def main() -> int:
     with open(args.pool) as f:
         pool = json.load(f)
 
-    errors, warnings, n_fixed = validate_and_fix(pool, fix=args.fix)
+    errors, warnings, n_fixed, unrecoverable = validate_and_fix(pool, fix=args.fix)
 
     if not args.quiet:
         for w in warnings:
@@ -129,7 +132,11 @@ def main() -> int:
     elif n_fixed > 0 and not errors:
         print(f"OK: {n} papers validated after auto-fix")
 
-    return 0 if (not errors or (args.fix and n_fixed > 0 and not [e for e in errors if "missing required" in e])) else 1
+    if unrecoverable > 0:
+        return 1
+    if errors and not args.fix:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -72,7 +72,7 @@ Combine all results across all queries into a single `raw_candidates.json`:
 
 **Always run this before starting Phase 2.** Multiple search queries routinely
 return the same papers. Verifying duplicates wastes 30-40% of S2 quota at
-1 QPS.
+1 query per second.
 
 ```bash
 python scripts/pre_dedup_candidates.py \
@@ -84,7 +84,7 @@ Use `workspace/deduped_candidates.json` as input to Phase 2.
 
 ## Phase 2 — Sequential Verification via Semantic Scholar
 
-The paper enforces strict sequential verification at ≤1 QPS via the public
+The paper enforces strict sequential verification at ≤1 query per second via the public
 Semantic Scholar API. We follow the same constraint.
 
 ### S2 response cache
@@ -114,7 +114,7 @@ python scripts/s2_cache.py --cache workspace/cache/s2_cache.json \
        &limit=5
        &fields=title,abstract,year,authors,venue,externalIds,openAccessPdf
    ```
-   No API key required for the public endpoint. Be polite: 1 QPS.
+   No API key required for the public endpoint. Be polite: 1 query per second.
 
 2. **Take the top hit**. Compare `title` to the candidate `title` via the
     helper:
@@ -161,7 +161,7 @@ python scripts/s2_cache.py --cache workspace/cache/s2_cache.json \
 
 ### Rate-limit etiquette
 
-The S2 public endpoint enforces ~1 QPS without an API key. If you receive
+The S2 public endpoint enforces ~1 query per second without an API key. If you receive
 HTTP 429, sleep 5 seconds and retry. Do not parallelize Phase 2 — verification
 must be strictly sequential.
 
@@ -176,7 +176,7 @@ The split exists because:
 - **Discovery is high-throughput, low-stakes**. You want to cast a wide net
   fast. Search APIs accept high concurrency.
 - **Verification is low-throughput, high-stakes**. The S2 API protects
-  itself with QPS limits, and the verification step is what keeps the paper
+  itself with per-second rate limits, and the verification step is what keeps the paper
   honest. Faking a citation is trivially easy without it.
 
 The paper's design "successfully combines the high-concurrency tolerance of

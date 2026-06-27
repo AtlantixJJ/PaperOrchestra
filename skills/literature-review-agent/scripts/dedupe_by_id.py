@@ -23,6 +23,12 @@ def norm_title(t: str) -> str:
     return re.sub(r"[^a-z0-9]", "", t.lower())
 
 
+def merge_discovered_for(a: dict, b: dict) -> list:
+    df_a = a.get("discovered_for") or []
+    df_b = b.get("discovered_for") or []
+    return list(dict.fromkeys(df_a + df_b))
+
+
 def make_key(paper: dict) -> str:
     if paper.get("paperId"):
         return f"s2:{paper['paperId']}"
@@ -31,7 +37,7 @@ def make_key(paper: dict) -> str:
         return f"doi:{ext['DOI'].lower()}"
     if ext.get("ArXiv"):
         # strip version suffix if any
-        a = ext["ArXiv"].split("v")[0] if "v" in ext["ArXiv"][-3:] else ext["ArXiv"]
+        a = re.sub(r"v\d+$", "", ext["ArXiv"])
         return f"arxiv:{a.lower()}"
     title = paper.get("title", "")
     return f"title:{norm_title(title)}"
@@ -62,12 +68,10 @@ def main() -> int:
             score_old = existing.get("match_score", 0)
             if score_new > score_old:
                 # merge discovered_for
-                merged = existing.get("discovered_for", []) + c.get("discovered_for", [])
-                c["discovered_for"] = list(dict.fromkeys(merged))  # preserve order, dedupe
+                c["discovered_for"] = merge_discovered_for(existing, c)
                 by_key[key] = c
             else:
-                merged = existing.get("discovered_for", []) + c.get("discovered_for", [])
-                existing["discovered_for"] = list(dict.fromkeys(merged))
+                existing["discovered_for"] = merge_discovered_for(existing, c)
             collisions.append((key, c.get("title", "")))
         else:
             by_key[key] = c
@@ -86,12 +90,10 @@ def main() -> int:
             id_new = str(c.get("paperId", ""))
             id_old = str(existing.get("paperId", ""))
             if len(id_new) > len(id_old):
-                merged = existing.get("discovered_for", []) + c.get("discovered_for", [])
-                c["discovered_for"] = list(dict.fromkeys(merged))
+                c["discovered_for"] = merge_discovered_for(existing, c)
                 by_title[t_key] = c
             else:
-                merged = existing.get("discovered_for", []) + c.get("discovered_for", [])
-                existing["discovered_for"] = list(dict.fromkeys(merged))
+                existing["discovered_for"] = merge_discovered_for(existing, c)
             collisions.append((t_key, c.get("title", "")))
         else:
             by_title[t_key] = c

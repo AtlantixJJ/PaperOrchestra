@@ -2,7 +2,7 @@
 """
 s2_cache.py — Persistent Semantic Scholar verification cache.
 
-Problem: Phase 2 verification is throttled to 1 QPS. If a pipeline run
+Problem: Phase 2 verification is throttled to 1 query per second. If a pipeline run
 fails partway through (gate error, network timeout, interrupted session),
 re-running wastes the full S2 wait time again on already-verified papers.
 

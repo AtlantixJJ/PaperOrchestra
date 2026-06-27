@@ -205,7 +205,7 @@ costs ~$0.10-$0.15. Check <https://exa.ai/pricing> for current rates.
 
 Exa's rate limits are generous; the paper's 10-worker parallel discovery
 pattern is well within them. The pipeline's wall-time floor is still set
-by Semantic Scholar's 1 QPS verification limit, not by Exa.
+by Semantic Scholar's 1 query per second verification limit, not by Exa.
 
 ## Security
 

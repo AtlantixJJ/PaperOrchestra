@@ -4,7 +4,7 @@ pre_dedup_candidates.py — Deduplicate Phase 1 raw candidates by normalized
 title before Phase 2 Semantic Scholar verification.
 
 Multiple search queries in Phase 1 often return the same papers. Verifying
-duplicates wastes S2 quota (1 QPS hard cap) and adds 30-40% unnecessary
+duplicates wastes S2 quota (1 query per second hard cap) and adds 30-40% unnecessary
 wall-time. This script removes obvious duplicates — same paper found via
 multiple queries — before the sequential verification loop begins.
 
@@ -40,24 +40,7 @@ def norm_title(t: str) -> str:
     return " ".join(t.split())
 
 
-def levenshtein_ratio(a: str, b: str) -> float:
-    if not a and not b:
-        return 100.0
-    if not a or not b:
-        return 0.0
-    la, lb = len(a), len(b)
-    if la < lb:
-        a, b = b, a
-        la, lb = lb, la
-    prev = list(range(lb + 1))
-    for i, ca in enumerate(a):
-        curr = [i + 1]
-        for j, cb in enumerate(b):
-            cost = 0 if ca == cb else 1
-            curr.append(min(prev[j + 1] + 1, curr[j] + 1, prev[j] + cost))
-        prev = curr
-    dist = prev[lb]
-    return (1.0 - dist / max(la, lb)) * 100.0
+from levenshtein_match import ratio as levenshtein_ratio
 
 
 def extract_arxiv_id(candidate: dict) -> str | None:

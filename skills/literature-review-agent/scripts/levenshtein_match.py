@@ -41,7 +41,7 @@ def ratio(a: str, b: str, substring_bypass: bool = False) -> int:
     r = int(round(Levenshtein.ratio(na, nb) * 100))
     if substring_bypass and len(na.split()) < 4:
         if na in nb:
-            return max(r, 95)
+            return 100
     return r
 
 
@@ -52,9 +52,9 @@ def main() -> int:
     p.add_argument("--found", required=True,
                    help="The title returned by Semantic Scholar")
     p.add_argument("--substring-bypass", action="store_true",
-                   help="Bump short-candidate substring matches to 95")
+                   help="Bump short-candidate substring matches to 100")
     p.add_argument("--threshold", type=int, default=70,
-                   help="Print PASS/FAIL alongside the ratio (default 70)")
+                   help="Ratio threshold for PASS/FAIL (strictly greater-than; default 70).")
     args = p.parse_args()
 
     r = ratio(args.candidate, args.found, args.substring_bypass)

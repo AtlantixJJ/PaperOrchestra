@@ -47,10 +47,6 @@ def backend_label(mode: "Mode") -> str:
     return "LLM" if mode is Mode.LLM else "agy"
 
 
-class SummaryError(RuntimeError):
-    """Raised when a summary cannot be produced and fallback is disabled."""
-
-
 @dataclass
 class Problem:
     """A maintenance problem, optionally attributable to a specific bibtex_key."""
@@ -277,20 +273,25 @@ REFERENCES_DIR = SCRIPT_DIR.parent / "references"
 
 
 @functools.lru_cache(maxsize=1)
-def load_summary_assets() -> tuple[str, str]:
-    """Return the (required) summary template and prompt, cached after first use.
+def load_summary_assets() -> tuple[str, str, str]:
+    """Return (template, llm_prompt, agent_prompt), cached after first use.
+
+    Two prompts because the backends receive the paper differently: the LLM
+    backend is handed the extracted PDF *text* inline, while the agent (agy)
+    backend is handed a PDF *path* it must open and read itself.
 
     Loaded lazily rather than at import time so that importing this module for
     its helpers (e.g. pool_papers) never depends on these files existing.
     """
     try:
         template = (REFERENCES_DIR / "summary_template.md").read_text(encoding="utf-8")
-        prompt = (REFERENCES_DIR / "summary_prompt.txt").read_text(encoding="utf-8")
+        llm_prompt = (REFERENCES_DIR / "summary_prompt_llm.md").read_text(encoding="utf-8")
+        agent_prompt = (REFERENCES_DIR / "summary_prompt_agent.md").read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise RuntimeError(
             f"Required summary asset missing in {REFERENCES_DIR}: {exc.filename}"
         ) from exc
-    return template, prompt
+    return template, llm_prompt, agent_prompt
 
 
 def yaml_scalar(value: object) -> str:
@@ -299,37 +300,11 @@ def yaml_scalar(value: object) -> str:
     return f'"{text}"'
 
 def guess_one_word(paper: dict) -> str:
-    text = " ".join([
-        str(paper.get("title") or ""),
-        str(paper.get("abstract") or ""),
-        str(paper.get("venue") or ""),
-    ]).lower()
-    for word in ("gaussian", "feedforward", "attention", "pose", "mesh", "nerf", "metric", "dataset", "rendering", "optimization"):
-        if word in text:
-            return word
     return "other"
 
 def s2_url(paper: dict) -> str:
     paper_id = paper.get("paperId")
     return f"https://www.semanticscholar.org/paper/{paper_id}" if paper_id else ""
-
-def fallback_summary(paper: dict, key: str, pdf_path: str, status: str) -> str:
-    template, _ = load_summary_assets()
-    abstract = paper.get("abstract") or "No abstract is available in the citation pool."
-    title = paper.get("title", key)
-    body = template.replace("# <title>", f"# {title}", 1)
-    body = body.replace(
-        "(A concise but technical summary, including only the technical details and results, and it can include more technical details that the original abstract does not contain.)",
-        abstract,
-        1,
-    )
-    body = body.replace(
-        "(Make this detailed, self-contained, mathematically rich and rigorous.)",
-        "TODO: Replace this metadata-only placeholder with a detailed LLM summary.",
-        1,
-    )
-    body = body.replace("(Include concrete numbers and metrics.)", "TODO", 1)
-    return apply_summary_frontmatter(body, paper, key, pdf_path, status)
 
 def summary_frontmatter(paper: dict, key: str, pdf_path: str, status: str) -> str:
     lines = [
@@ -400,7 +375,6 @@ def summarize_one(
     summary_command: str,
     timeout: int,
     dry_run: bool,
-    fallback_on_error: bool,
     mode: Mode,
 ) -> SummaryResult:
     rel_pdf_yaml = f"papers/{key}.pdf" if pdf_path.exists() else ""
@@ -421,21 +395,20 @@ def summarize_one(
     else:
         pdf_info = str(pdf_path.resolve()) if pdf_path.exists() else "(no local PDF available)"
 
-    template, prompt_template = load_summary_assets()
+    template, llm_prompt, agent_prompt = load_summary_assets()
+    prompt_template = llm_prompt if mode is Mode.LLM else agent_prompt
     prompt = prompt_template.format(
         summary_template=template.rstrip(),
         metadata=metadata,
         pdf_path=pdf_info,
     )
-    prompt += "\n\nCRITICAL: DO NOT call any tools to search online. You must only use the provided metadata and PDF text to generate the summary."
     summary_path.parent.mkdir(parents=True, exist_ok=True)
 
     if dry_run:
-        summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "prompt_only"))
         return SummaryResult(
-            summary_status="prompt_only",
-            summary_md_path=str(summary_path),
-            summary_message="dry-run placeholder written",
+            summary_status="dry_run",
+            summary_md_path="",
+            summary_message="dry-run placeholder skipped",
         )
 
     # Broad except is intentional: any backend failure (network, auth, parsing,
@@ -483,10 +456,11 @@ def summarize_one(
         )
         fields = parse_frontmatter_text(md)
         if fields.get("bibtex_key") != key:
-            summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, "needs_review"))
+            if summary_path.exists():
+                summary_path.unlink()
             return SummaryResult(
-                summary_status="needs_review",
-                summary_md_path=str(summary_path),
+                summary_status="failed",
+                summary_md_path="",
                 summary_message="summary output bibtex_key did not match canonical key",
             )
 
@@ -498,15 +472,13 @@ def summarize_one(
             summary_message=f"{label} summary written",
         )
 
-    if fallback_on_error:
-        summary_path.write_text(fallback_summary(paper, key, rel_pdf_yaml, f"{label.lower()}_failed"))
-        return SummaryResult(
-            summary_status=f"{label.lower()}_failed",
-            summary_md_path=str(summary_path),
-            summary_message=stderr.strip()[:500],
-        )
-
-    raise SummaryError(f"summary command failed for {key}: {stderr.strip()[:500]}")
+    if summary_path.exists():
+        summary_path.unlink()
+    return SummaryResult(
+        summary_status="failed",
+        summary_md_path="",
+        summary_message=stderr.strip()[:500] or "Unknown error",
+    )
 
 # --- Batch driver & CLI ---
 
@@ -516,7 +488,6 @@ def build_reference_database(
     timeout: int,
     force: bool,
     dry_run: bool,
-    fallback_on_error: bool,
     mode: Mode,
     workers: int,
 ) -> int:
@@ -589,6 +560,7 @@ def build_reference_database(
         print(f"\nStarting multithreaded enrichment for {total_to_enrich} papers...")
         completed = 0
         counter_lock = threading.Lock()
+        failed_summaries = []
 
         def process_paper(args_tuple):
             nonlocal completed
@@ -610,13 +582,14 @@ def build_reference_database(
                 summary_command=summary_command,
                 timeout=timeout,
                 dry_run=dry_run,
-                fallback_on_error=fallback_on_error,
                 mode=mode,
             )
 
             with counter_lock:
                 completed += 1
                 done = completed
+                if summary_record.summary_status == "failed":
+                    failed_summaries.append((key, summary_record.summary_message))
 
             print(f"[{key}] PDF: {pdf_status} | Summary: {summary_record.summary_status}")
             print(f"finished summarizing {key}. ... {done}/{total_to_enrich}")
@@ -624,13 +597,22 @@ def build_reference_database(
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                 list(executor.map(process_paper, papers_to_enrich))
-        except SummaryError as exc:
+        except Exception as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
+
+        if failed_summaries:
+            print(f"\nERROR: {len(failed_summaries)} summaries failed to generate:", file=sys.stderr)
+            for k, reason in sorted(failed_summaries):
+                print(f"  {k}: {reason}", file=sys.stderr)
+            print("These keys are now NEEDS_REGEN.", file=sys.stderr)
 
     final_maintenance = maintain_reference_database(workspace=workspace, papers=papers, fix=True)
     if final_maintenance.changed:
         print(f"\nMaintenance: synchronized {final_maintenance.index_path}")
+
+    if total_to_enrich > 0 and failed_summaries:
+        return 1
 
     print("\nBatch enrichment complete.")
     return 0
@@ -644,7 +626,6 @@ def main():
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--fallback-on-error", action="store_true")
     parser.add_argument("--mode", choices=[m.value for m in Mode], default=Mode.LLM.value,
                         help="Summarization backend. 'llm' (default, preferred): direct litellm API call. "
                              "'agent': CLI subagent named by --summary-command (e.g. agy) — use as a fallback when llm fails.")
@@ -706,7 +687,6 @@ def main():
         timeout=args.timeout,
         force=args.force,
         dry_run=args.dry_run,
-        fallback_on_error=args.fallback_on_error,
         mode=mode,
         workers=args.workers,
     )

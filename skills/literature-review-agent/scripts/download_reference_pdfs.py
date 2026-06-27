@@ -8,7 +8,6 @@ from pathlib import Path
 
 # Add script directory to path to import local modules
 sys.path.append(str(Path(__file__).parent))
-from common_subagent import run_subagent
 from build_reference_database import pool_papers
 from bibtex_format import assign_bibtex_keys
 import urllib.request
@@ -143,8 +142,8 @@ def main():
     
     if success_count < len(missing):
         print(f"WARN: {len(missing) - success_count} PDFs could not be downloaded by the agent.")
-        failed_keys = {missing_tuple[1] for missing_tuple in missing if missing_tuple[1] not in [k for k, s, m in results if s]}
-        failed_papers = [missing_tuple[0] for missing_tuple in missing if missing_tuple[1] in failed_keys]
+        succeeded = {k for k, s, m in results if s}
+        failed_papers = [p for p, k, _ws in missing if k not in succeeded]
         failed_log = workspace / "failed_downloads.json"
         failed_log.write_text(json.dumps(failed_papers, indent=2, ensure_ascii=False))
         print(f"Failed papers logged to {failed_log}")

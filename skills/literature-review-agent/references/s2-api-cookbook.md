@@ -20,7 +20,7 @@ export SEMANTIC_SCHOLAR_API_KEY="your-key-here"
 
 The bundled `scripts/s2_search.py` helper picks this up automatically.  If the
 variable is not set the script falls back to the unauthenticated endpoint — the
-pipeline works fine either way; just keep to ≤1 QPS on live requests.
+pipeline works fine either way; just keep to ≤1 query per second on live requests.
 
 ```bash
 # check whether the key is configured
@@ -95,7 +95,7 @@ You can pass these as `<paperId>`:
 
 ## Rate limits
 
-- Unauthenticated: ~1 QPS sustained. Bursts will get 429.
+- Unauthenticated: ~1 query per second sustained. Bursts will get 429.
 - Per the paper, "the strict throughput limits of the Semantic Scholar API
   (1 query per second)" — App. B.
 
@@ -133,6 +133,6 @@ will not include the abstract.
 
 The S2 API is a public service. Do not hammer it. If you have many candidates:
 
-- Throttle to 1 QPS.
+- Throttle to 1 query per second.
 - Cache hits (the dedup script already serves as a deduplication cache).
 - Do not parallelize. Verification is sequential by design.

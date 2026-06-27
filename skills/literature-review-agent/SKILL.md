@@ -9,7 +9,7 @@ Faithful implementation of the Hybrid Literature Agent from PaperOrchestra
 (Song et al., 2026, arXiv:2604.05018, §4 Step 3, App. D.3, App. F.1 p.46).
 
 **Cost: ~20–30 LLM calls.** This is one of the two longest steps (the other is
-plotting). Wall-time floor is set by Semantic Scholar's 1 QPS verification
+plotting). Wall-time floor is set by Semantic Scholar's 1 query per second verification
 limit.
 
 ## Inputs
@@ -45,24 +45,13 @@ PHASE 1 — Parallel Candidate Discovery
      - Collect (title, snippet, url) tuples — no verification yet.
    → PRE-DEDUP before Phase 2 (see Step 1.5 below)
 
-PHASE 2 — Sequential Citation Verification (1 QPS, with cache)
+PHASE 2 — Sequential Citation Verification (1 query per second, with cache)
    For each candidate (after pre-dedup), sequentially:
-     0. Check s2_cache.json first (scripts/s2_cache.py --check).
-        If HIT: use cached response, skip live S2 call. No throttle needed.
-        If MISS: proceed with live request below.
-     1. Query Semantic Scholar by title:
-          GET https://api.semanticscholar.org/graph/v1/paper/search?query=<title>
-              &fields=title,abstract,year,authors,venue,externalIds,openAccessPdf&limit=5
-        (Public endpoint, no key. Throttle to 1 QPS for live requests only.)
-     2. Store the S2 response in cache: s2_cache.py --store.
-     3. Pick the top hit. Check Levenshtein title ratio against the original
-         candidate title. If ratio ≤ 70: discard (the threshold is strictly > 70).
-     4. Bonus: if year and venue exactly align with hints, add a +5 point
-        match-quality bonus.
-     5. Require: abstract is non-empty.
-     6. Require: paper.year (or month if known) strictly predates cutoff_date.
-        Months default to day-1: e.g., "October 2024" → 2024-10-01.
-     7. If all checks pass, add to verified pool.
+     - Check cache first (no throttle on HIT).
+     - Query Semantic Scholar by title (1 query per second on live request).
+     - Store the S2 response in cache.
+     - Verify title match, non-empty abstract, and temporal cutoff.
+     - Add to verified pool if all checks pass.
    After all candidates are verified, dedup by Semantic Scholar paperId.
 ```
 
@@ -129,7 +118,7 @@ the originating query ID so you can later attribute it to "intro" vs
 **Always run this before starting Phase 2.** Multiple search queries routinely
 return the same papers (e.g., "Attention is All You Need" appears in almost
 every NLP discovery query). Verifying duplicates wastes 30-40% of S2 quota
-at 1 QPS.
+at 1 query per second.
 
 ```bash
 python skills/literature-review-agent/scripts/pre_dedup_candidates.py \
@@ -153,7 +142,7 @@ python skills/literature-review-agent/scripts/s2_cache.py \
 # exit 1 → proceed to Step B
 ```
 
-**Step B — live S2 request** (cache MISS only, throttle to 1 QPS):
+**Step B — live S2 request** (cache MISS only, throttle to 1 query per second):
 
 **Preferred:** use the bundled `scripts/s2_search.py` helper — it handles
 auth, retries, and 429 back-off automatically:
@@ -162,7 +151,7 @@ auth, retries, and 429 back-off automatically:
 python skills/literature-review-agent/scripts/s2_search.py \
     --query "<URL-decoded candidate title>" --limit 5 --env .env
 # If SEMANTIC_SCHOLAR_API_KEY is set the key is forwarded automatically.
-# If not, the public unauthenticated endpoint is used (≤1 QPS, still works).
+# If not, the public unauthenticated endpoint is used (≤1 query per second, still works).
 ```
 
 Check whether the key is configured before starting Phase 2:
@@ -191,7 +180,8 @@ For the top hit:
 ```bash
 python skills/literature-review-agent/scripts/levenshtein_match.py \
     --candidate "Original candidate title" \
-    --found "S2 returned title"
+    --found "S2 returned title" \
+    --substring-bypass
 # prints "<ratio> PASS" or "<ratio> FAIL" (e.g., "85 PASS"). Discard if ≤ 70.
 ```
 
@@ -248,7 +238,7 @@ python skills/literature-review-agent/scripts/download_reference_pdfs.py \
     --pool workspace/citation_pool.json
 ```
 
-If any papers fail to download, the script will create `workspace/failed_downloads.json`. You (the host agent) MUST overlook this progress. For any missing PDFs listed in that file, you must search online, find the PDFs, and download them manually into `workspace/reference_database/papers/<bibtex_key>.pdf`.
+If any papers fail to download, the script will create `workspace/failed_downloads.json`. You (the host agent) MUST NOT ignore this — for any missing PDFs listed in that file, search online, find the PDFs, and download them manually into `workspace/reference_database/papers/<bibtex_key>.pdf`.
 
 After verifying that all papers have a valid PDF, run the batch enrichment script to
 generate Markdown summaries and update the index. This wrapper only reads the PDFs and
@@ -287,16 +277,7 @@ Build or check the synchronized index:
 python skills/literature-review-agent/scripts/build_reference_database.py --pool workspace/citation_pool.json --maintain-only
 ```
 
-**CRITICAL GUARDRAIL:** Do NOT proceed to Step 5 (BibTeX generation) until `build_reference_database.py --maintain-only` exits with 0 errors. If it reports `NEEDS_REGEN`, re-run enrichment — first retry the LLM pass, then fall back to `--mode agent --summary-command "agy"` for any summaries that still fail.
-
-The index contains one row per verified paper:
-
-```text
-bibtex_key,title,location,year,summary,status
-```
-
-Run `build_reference_database.py` to regenerate missing or corrupt references.
-The maintenance check fails when:
+**CRITICAL GUARDRAIL:** Do NOT proceed to Step 5 (BibTeX generation) until `build_reference_database.py --maintain-only` exits with 0 errors. The maintenance check fails when:
 
 - a paper in `citation_pool.json` has no summary,
 - a summary has no matching paper,
@@ -304,8 +285,13 @@ The maintenance check fails when:
 - a summary frontmatter `summary_status` is not `complete`,
 - `index.json` is missing or stale.
 
-The reference database step is complete only when every verified paper has a
-Markdown summary and `build_reference_database.py --pool workspace/citation_pool.json --maintain-only` exits 0.
+If it reports `NEEDS_REGEN`, re-run enrichment — first retry the LLM pass, then fall back to `--mode agent --summary-command "agy"` for any summaries that still fail.
+
+The index contains one row per verified paper:
+
+```text
+bibtex_key,title,location,year,summary,status
+```
 
 ### 5. Build the BibTeX file
 
@@ -418,20 +404,20 @@ If your host has no web search tool, switch to degraded mode:
 - `references/citation-density-rule.md` — the ≥90% integration rule
 - `references/s2-api-cookbook.md` — Semantic Scholar URLs, fields, rate limits
 - `references/exa-search-cookbook.md` — optional Exa backend for Phase 1 (research-paper-focused web search)
-- `scripts/pre_dedup_candidates.py` — **NEW** dedup Phase 1 candidates before Phase 2 (saves 30-40% S2 quota)
-- `scripts/s2_cache.py` — **NEW** persistent S2 response cache (eliminates re-verification on re-runs)
-- `scripts/validate_pool.py` — **NEW** validate & auto-fix citation_pool.json schema (authors format)
+- `scripts/pre_dedup_candidates.py` — dedup Phase 1 candidates before Phase 2 (saves 30-40% S2 quota)
+- `scripts/s2_cache.py` — persistent S2 response cache (eliminates re-verification on re-runs)
+- `scripts/validate_pool.py` — validate & auto-fix citation_pool.json schema (authors format)
 - `scripts/sync_keys.py` — sync cite keys in .tex with canonical bibtex_keys after drafting
 - `scripts/levenshtein_match.py` — fuzzy title match (ratio strictly > 70)
 - `scripts/check_cutoff.py` — date cmp w/ month → day-1 default
 - `scripts/dedupe_by_id.py` — dedup verified pool by S2 paperId
 - `scripts/bibtex_format.py` — build refs.bib from JSON pool
 - `scripts/citation_coverage.py` — ≥90% citation coverage gate
-- `scripts/s2_search.py` — **NEW** Semantic Scholar title-search helper; reads `SEMANTIC_SCHOLAR_API_KEY` from env (optional — falls back to unauthenticated)
+- `scripts/s2_search.py` — Semantic Scholar title-search helper; reads `SEMANTIC_SCHOLAR_API_KEY` from env (optional — falls back to unauthenticated)
 - `scripts/exa_search.py` — optional Exa Phase 1 backend (reads `EXA_API_KEY` from env)
 - `scripts/build_reference_database.py` — required batch wrapper that reads the downloaded PDFs, summarizes them (default `--mode llm` via litellm; `--mode agent` falls back to a CLI subagent such as `agy`), writes Markdown summaries, and maintains the index (`--maintain-only`) for all verified papers
 - `scripts/common_subagent.py` — internal module imported by `build_reference_database.py`; provides `run_subagent()` for invoking `agy` subagents
-- `scripts/sync_reference_index.py` — internal helper that synchronizes `index.json` with summary files (not called directly in the pipeline)
 - reference-database maintenance (pool/summary alignment check + regeneration) is built into `build_reference_database.py`; run it with `--maintain-only`
-- `references/summary_prompt.txt` — prompt template used by `build_reference_database.py` for paper summarization
+- `references/summary_prompt_llm.md` — summarization prompt for `--mode llm` (extracted PDF text is injected inline)
+- `references/summary_prompt_agent.md` — summarization prompt for `--mode agent` (the agy subagent is given a PDF path to open and read)
 - `references/summary_template.md` — Markdown structure template for paper summaries
